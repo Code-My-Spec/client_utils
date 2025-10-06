@@ -9,9 +9,12 @@ defmodule ExUnitJsonFormatter do
   # GenServer callbacks that receive test runner messages
 
   def init(opts) do
+    output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
+
     config = %{
       seed: opts[:seed],
       trace: opts[:trace],
+      output_file: output_file,
       pass_counter: 0,
       failure_counter: 0,
       skipped_counter: 0,
@@ -40,9 +43,8 @@ defmodule ExUnitJsonFormatter do
       "pending" => Enum.reverse(state[:pending])
     }
 
-    result
-    |> Poison.encode!()
-    |> IO.puts()
+    json = Poison.encode!(result)
+    write_output(json, state[:output_file])
 
     {:noreply, state}
   end
@@ -57,9 +59,8 @@ defmodule ExUnitJsonFormatter do
       "pending" => Enum.reverse(state[:pending])
     }
 
-    result
-    |> Poison.encode!()
-    |> IO.puts()
+    json = Poison.encode!(result)
+    write_output(json, state[:output_file])
 
     {:noreply, state}
   end
@@ -134,6 +135,14 @@ defmodule ExUnitJsonFormatter do
        | skipped_counter: state[:skipped_counter] + 1,
          pending: [test_result | state[:pending]]
      }}
+  end
+
+  # OUTPUT FUNCTIONS
+
+  defp write_output(json, nil), do: IO.puts(json)
+
+  defp write_output(json, output_file) do
+    File.write!(output_file, json)
   end
 
   # FORMATTING FUNCTIONS
