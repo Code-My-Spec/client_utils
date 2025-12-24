@@ -10,11 +10,13 @@ defmodule ExUnitJsonFormatter do
 
   def init(opts) do
     output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
+    streaming = opts[:streaming] || System.get_env("EXUNIT_JSON_STREAMING") == "true"
 
     config = %{
       seed: opts[:seed],
       trace: opts[:trace],
       output_file: output_file,
+      streaming: streaming,
       pass_counter: 0,
       failure_counter: 0,
       skipped_counter: 0,
@@ -30,7 +32,18 @@ defmodule ExUnitJsonFormatter do
   end
 
   def handle_cast({:suite_started, _opts}, state) do
-    {:noreply, %{state | start_time: NaiveDateTime.utc_now()}}
+    start_time = NaiveDateTime.utc_now()
+
+    if state[:streaming] do
+      event = %{
+        "type" => "suite:start",
+        "start" => NaiveDateTime.to_iso8601(start_time)
+      }
+
+      write_stream_event(event)
+    end
+
+    {:noreply, %{state | start_time: start_time}}
   end
 
   def handle_cast({:suite_finished, run_us, load_us}, state) do
@@ -42,6 +55,15 @@ defmodule ExUnitJsonFormatter do
       "failures" => Enum.reverse(state[:failures]),
       "pending" => Enum.reverse(state[:pending])
     }
+
+    if state[:streaming] do
+      event = %{
+        "type" => "suite:end",
+        "stats" => stats
+      }
+
+      write_stream_event(event)
+    end
 
     json = Poison.encode!(result)
     write_output(json, state[:output_file])
@@ -58,6 +80,15 @@ defmodule ExUnitJsonFormatter do
       "failures" => Enum.reverse(state[:failures]),
       "pending" => Enum.reverse(state[:pending])
     }
+
+    if state[:streaming] do
+      event = %{
+        "type" => "suite:end",
+        "stats" => stats
+      }
+
+      write_stream_event(event)
+    end
 
     json = Poison.encode!(result)
     write_output(json, state[:output_file])
@@ -96,12 +127,30 @@ defmodule ExUnitJsonFormatter do
   def handle_cast({:test_finished, test = %ExUnit.Test{state: nil}}, state) do
     test_result = format_test_pass(test)
 
+    if state[:streaming] do
+      event = %{
+        "type" => "test:pass",
+        "test" => test_result
+      }
+
+      write_stream_event(event)
+    end
+
     {:noreply,
      %{state | pass_counter: state[:pass_counter] + 1, tests: [test_result | state[:tests]]}}
   end
 
   def handle_cast({:test_finished, test = %ExUnit.Test{state: {:failed, failure}}}, state) do
     test_result = format_test_failure(test, failure)
+
+    if state[:streaming] do
+      event = %{
+        "type" => "test:fail",
+        "test" => test_result
+      }
+
+      write_stream_event(event)
+    end
 
     {:noreply,
      %{
@@ -113,6 +162,15 @@ defmodule ExUnitJsonFormatter do
 
   def handle_cast({:test_finished, test = %ExUnit.Test{state: {:skip, _}}}, state) do
     test_result = format_test_pass(test) |> Map.put("pending", true)
+
+    if state[:streaming] do
+      event = %{
+        "type" => "test:pending",
+        "test" => test_result
+      }
+
+      write_stream_event(event)
+    end
 
     {:noreply,
      %{
@@ -129,6 +187,15 @@ defmodule ExUnitJsonFormatter do
   def handle_cast({:test_finished, test = %ExUnit.Test{state: {:excluded, _}}}, state) do
     test_result = format_test_pass(test) |> Map.put("pending", true)
 
+    if state[:streaming] do
+      event = %{
+        "type" => "test:pending",
+        "test" => test_result
+      }
+
+      write_stream_event(event)
+    end
+
     {:noreply,
      %{
        state
@@ -143,6 +210,10 @@ defmodule ExUnitJsonFormatter do
 
   defp write_output(json, output_file) do
     File.write!(output_file, json)
+  end
+
+  defp write_stream_event(event) do
+    IO.puts(Poison.encode!(event))
   end
 
   # FORMATTING FUNCTIONS
