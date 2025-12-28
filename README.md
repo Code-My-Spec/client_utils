@@ -102,7 +102,7 @@ This is useful when you want real-time feedback on test execution while also gen
 ```json
 {"type":"suite:start","start":"2024-01-01T12:00:00.000000"}
 {"type":"test:pass","test":{"title":"should work","fullTitle":"MyModule: should work"}}
-{"type":"test:fail","test":{"title":"should fail","fullTitle":"MyModule: should fail","err":{...}}}
+{"type":"test:fail","test":{"title":"should fail","fullTitle":"MyModule: should fail","error":{...}}}
 {"type":"suite:end","stats":{...}}
 {"stats":{...},"tests":[...],"failures":[...],"pending":[...]}
 ```

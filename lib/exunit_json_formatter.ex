@@ -279,7 +279,7 @@ defmodule ExUnitJsonFormatter do
     %{
       "title" => to_string(name),
       "fullTitle" => "#{inspect(case)}: #{name}",
-      "err" => %{
+      "error" => %{
         "file" => Path.relative_to_cwd(tags[:file]),
         "line" => tags[:line],
         "message" => message
@@ -339,7 +339,7 @@ defmodule ExUnitJsonFormatter do
     %{
       "title" => title,
       "fullTitle" => title,
-      "err" => %{"file" => Path.relative_to_cwd(tags[:file]), "message" => message}
+      "error" => %{"file" => Path.relative_to_cwd(tags[:file]), "message" => message}
     }
   end
 

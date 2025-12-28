@@ -3,46 +3,66 @@ defmodule ExUnitJsonFormatterTest do
   import ExUnitJsonFormatter
 
   test "formats passing test" do
-    test = %ExUnit.Test{case: TestModule, name: :'should test'}
+    test = %ExUnit.Test{case: TestModule, name: :"should test"}
+
     assert format_test_pass(test) ==
-      %{"title" => "should test", "fullTitle" => "TestModule: should test"}
+             %{"title" => "should test", "fullTitle" => "TestModule: should test"}
   end
 
   test "formats failing test" do
-    failures = [{:error, catch_error(raise "\"oops\""), []},
-                {:error, catch_error(raise "oops"), []}]
-    test = %ExUnit.Test{case: TestModule,
-                               name: :'should test',
-                               tags: %{file: __ENV__.file, line: 1},
-                               state: {:failed, failures}}
+    failures = [
+      {:error, catch_error(raise "\"oops\""), []},
+      {:error, catch_error(raise "oops"), []}
+    ]
+
+    test = %ExUnit.Test{
+      case: TestModule,
+      name: :"should test",
+      tags: %{file: __ENV__.file, line: 1},
+      state: {:failed, failures}
+    }
+
     message = "\nFailure #1\n** (RuntimeError) \"oops\"\nFailure #2\n** (RuntimeError) oops"
+
     assert format_test_failure(test, failures) ==
-      %{"title" => "should test",
-        "fullTitle" => "TestModule: should test",
-        "err" => %{"file" => "test/exunit_json_formatter_test.exs",
-                   "line" => 1,
-                   "message" => message}}
+             %{
+               "title" => "should test",
+               "fullTitle" => "TestModule: should test",
+               "error" => %{
+                 "file" => "test/exunit_json_formatter_test.exs",
+                 "line" => 1,
+                 "message" => message
+               }
+             }
   end
 
   test "formats failing test case" do
-    failures = [{:error, catch_error(raise "oops"), []},
-                {:error, catch_error(raise "oops"), []}]
-    test = %ExUnit.Test{case: TestModule,
-                        name: :'should test',
-                        tags: %{file: __ENV__.file, line: 1}}
-    test_case = %ExUnit.TestCase{name: TestModule,
-                                 state: {:failed, failures},
-                                 tests: [test]}
+    failures = [{:error, catch_error(raise "oops"), []}, {:error, catch_error(raise "oops"), []}]
+
+    test = %ExUnit.Test{
+      case: TestModule,
+      name: :"should test",
+      tags: %{file: __ENV__.file, line: 1}
+    }
+
+    test_case = %ExUnit.TestCase{name: TestModule, state: {:failed, failures}, tests: [test]}
     message = "\nFailure #1\n** (RuntimeError) oops\nFailure #2\n** (RuntimeError) oops"
+
     assert format_test_case_failure(test_case, failures) ==
-      %{"title" => "TestModule: failure on setup_all callback",
-        "fullTitle" => "TestModule: failure on setup_all callback",
-        "err" => %{"file" => "test/exunit_json_formatter_test.exs",
-                   "message" => message}}
+             %{
+               "title" => "TestModule: failure on setup_all callback",
+               "fullTitle" => "TestModule: failure on setup_all callback",
+               "error" => %{"file" => "test/exunit_json_formatter_test.exs", "message" => message}
+             }
   end
 
   test "handles excluded test" do
-    test = %ExUnit.Test{case: TestModule, name: :'should test', state: {:excluded, "due to integration filter"}}
+    test = %ExUnit.Test{
+      case: TestModule,
+      name: :"should test",
+      state: {:excluded, "due to integration filter"}
+    }
+
     initial_state = %{skipped_counter: 0, pending: []}
     {:noreply, new_state} = ExUnitJsonFormatter.handle_cast({:test_finished, test}, initial_state)
     assert new_state.skipped_counter == 1
@@ -54,9 +74,10 @@ defmodule ExUnitJsonFormatterTest do
 
     state = %{streaming: true, start_time: nil}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:suite_started, %{}}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:suite_started, %{}}, state)
+      end)
 
     assert output =~ ~s("type":"suite:start")
     assert output =~ ~s("start":")
@@ -65,12 +86,13 @@ defmodule ExUnitJsonFormatterTest do
   test "streaming mode emits test:pass event" do
     import ExUnit.CaptureIO
 
-    test = %ExUnit.Test{case: TestModule, name: :'should test', state: nil}
+    test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil}
     state = %{streaming: true, pass_counter: 0, tests: []}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
+      end)
 
     assert output =~ ~s("type":"test:pass")
     assert output =~ ~s("title":"should test")
@@ -80,17 +102,20 @@ defmodule ExUnitJsonFormatterTest do
     import ExUnit.CaptureIO
 
     failures = [{:error, catch_error(raise "oops"), []}]
+
     test = %ExUnit.Test{
       case: TestModule,
-      name: :'should test',
+      name: :"should test",
       tags: %{file: __ENV__.file, line: 1},
       state: {:failed, failures}
     }
+
     state = %{streaming: true, failure_counter: 0, failures: []}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
+      end)
 
     assert output =~ ~s("type":"test:fail")
     assert output =~ ~s("title":"should test")
@@ -99,12 +124,13 @@ defmodule ExUnitJsonFormatterTest do
   test "streaming mode emits test:pending event for skipped tests" do
     import ExUnit.CaptureIO
 
-    test = %ExUnit.Test{case: TestModule, name: :'should test', state: {:skip, "skipped"}}
+    test = %ExUnit.Test{case: TestModule, name: :"should test", state: {:skip, "skipped"}}
     state = %{streaming: true, skipped_counter: 0, pending: []}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
+      end)
 
     assert output =~ ~s("type":"test:pending")
     assert output =~ ~s("pending":true)
@@ -113,12 +139,13 @@ defmodule ExUnitJsonFormatterTest do
   test "streaming mode emits test:pending event for excluded tests" do
     import ExUnit.CaptureIO
 
-    test = %ExUnit.Test{case: TestModule, name: :'should test', state: {:excluded, "excluded"}}
+    test = %ExUnit.Test{case: TestModule, name: :"should test", state: {:excluded, "excluded"}}
     state = %{streaming: true, skipped_counter: 0, pending: []}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
+      end)
 
     assert output =~ ~s("type":"test:pending")
     assert output =~ ~s("pending":true)
@@ -128,6 +155,7 @@ defmodule ExUnitJsonFormatterTest do
     import ExUnit.CaptureIO
 
     start_time = NaiveDateTime.utc_now()
+
     state = %{
       streaming: true,
       start_time: start_time,
@@ -142,9 +170,10 @@ defmodule ExUnitJsonFormatterTest do
       output_file: nil
     }
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:suite_finished, 1000, 500}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:suite_finished, 1000, 500}, state)
+      end)
 
     # Should have both the suite:end event and the final JSON blob
     lines = String.split(output, "\n", trim: true)
@@ -164,12 +193,13 @@ defmodule ExUnitJsonFormatterTest do
   test "non-streaming mode does not emit events" do
     import ExUnit.CaptureIO
 
-    test = %ExUnit.Test{case: TestModule, name: :'should test', state: nil}
+    test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil}
     state = %{streaming: false, pass_counter: 0, tests: []}
 
-    output = capture_io(fn ->
-      ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
-    end)
+    output =
+      capture_io(fn ->
+        ExUnitJsonFormatter.handle_cast({:test_finished, test}, state)
+      end)
 
     assert output == ""
   end
