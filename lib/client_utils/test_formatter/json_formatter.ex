@@ -1,222 +1,8 @@
-defmodule ExUnitJsonFormatter do
-  use GenServer
-
+defmodule ClientUtils.TestFormatter.JsonFormatter do
   @moduledoc """
-  Formats ExUnit output as a stream of JSON objects (roughly compatible
-  with Mocha's json-stream reporter)
+  Handles formatting of ExUnit test results into JSON-compatible maps.
   """
 
-  # GenServer callbacks that receive test runner messages
-
-  def init(opts) do
-    output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
-    streaming = opts[:streaming] || System.get_env("EXUNIT_JSON_STREAMING") == "true"
-
-    config = %{
-      seed: opts[:seed],
-      trace: opts[:trace],
-      output_file: output_file,
-      streaming: streaming,
-      pass_counter: 0,
-      failure_counter: 0,
-      skipped_counter: 0,
-      invalid_counter: 0,
-      case_counter: 0,
-      start_time: nil,
-      tests: [],
-      failures: [],
-      pending: []
-    }
-
-    {:ok, config}
-  end
-
-  def handle_cast({:suite_started, _opts}, state) do
-    start_time = NaiveDateTime.utc_now()
-
-    if state[:streaming] do
-      event = %{
-        "type" => "suite:start",
-        "start" => NaiveDateTime.to_iso8601(start_time)
-      }
-
-      write_stream_event(event)
-    end
-
-    {:noreply, %{state | start_time: start_time}}
-  end
-
-  def handle_cast({:suite_finished, run_us, load_us}, state) do
-    stats = format_stats(state, run_us, load_us)
-
-    result = %{
-      "stats" => stats,
-      "tests" => Enum.reverse(state[:tests]),
-      "failures" => Enum.reverse(state[:failures]),
-      "pending" => Enum.reverse(state[:pending])
-    }
-
-    if state[:streaming] do
-      event = %{
-        "type" => "suite:end",
-        "stats" => stats
-      }
-
-      write_stream_event(event)
-    end
-
-    json = Jason.encode!(result)
-    write_output(json, state[:output_file])
-
-    {:noreply, state}
-  end
-
-  def handle_cast({:suite_finished, %{run: run_us, load: load_us}}, state) do
-    stats = format_stats(state, run_us, load_us)
-
-    result = %{
-      "stats" => stats,
-      "tests" => Enum.reverse(state[:tests]),
-      "failures" => Enum.reverse(state[:failures]),
-      "pending" => Enum.reverse(state[:pending])
-    }
-
-    if state[:streaming] do
-      event = %{
-        "type" => "suite:end",
-        "stats" => stats
-      }
-
-      write_stream_event(event)
-    end
-
-    json = Jason.encode!(result)
-    write_output(json, state[:output_file])
-
-    {:noreply, state}
-  end
-
-  def handle_cast({:case_started, _}, state) do
-    {:noreply, state}
-  end
-
-  def handle_cast({:module_started, _}, state) do
-    {:noreply, state}
-  end
-
-  def handle_cast({:module_finished, _}, state) do
-    {:noreply, state}
-  end
-
-  def handle_cast(
-        {:case_finished, test_case = %ExUnit.TestCase{state: {:failed, failure}}},
-        state
-      ) do
-    test_result = format_test_case_failure(test_case, failure)
-    {:noreply, %{state | failures: [test_result | state[:failures]]}}
-  end
-
-  def handle_cast({:case_finished, _}, state) do
-    {:noreply, %{state | case_counter: state[:case_counter] + 1}}
-  end
-
-  def handle_cast({:test_started, _}, state) do
-    {:noreply, state}
-  end
-
-  def handle_cast({:test_finished, test = %ExUnit.Test{state: nil}}, state) do
-    test_result = format_test_pass(test)
-
-    if state[:streaming] do
-      event = %{
-        "type" => "test:pass",
-        "test" => test_result
-      }
-
-      write_stream_event(event)
-    end
-
-    {:noreply,
-     %{state | pass_counter: state[:pass_counter] + 1, tests: [test_result | state[:tests]]}}
-  end
-
-  def handle_cast({:test_finished, test = %ExUnit.Test{state: {:failed, failure}}}, state) do
-    test_result = format_test_failure(test, failure)
-
-    if state[:streaming] do
-      event = %{
-        "type" => "test:fail",
-        "test" => test_result
-      }
-
-      write_stream_event(event)
-    end
-
-    {:noreply,
-     %{
-       state
-       | failure_counter: state[:failure_counter] + 1,
-         failures: [test_result | state[:failures]]
-     }}
-  end
-
-  def handle_cast({:test_finished, test = %ExUnit.Test{state: {:skip, _}}}, state) do
-    test_result = format_test_pass(test) |> Map.put("pending", true)
-
-    if state[:streaming] do
-      event = %{
-        "type" => "test:pending",
-        "test" => test_result
-      }
-
-      write_stream_event(event)
-    end
-
-    {:noreply,
-     %{
-       state
-       | skipped_counter: state[:skipped_counter] + 1,
-         pending: [test_result | state[:pending]]
-     }}
-  end
-
-  def handle_cast({:test_finished, %ExUnit.Test{state: {:invalid, _}}}, state) do
-    {:noreply, %{state | invalid_counter: state[:invalid_counter] + 1}}
-  end
-
-  def handle_cast({:test_finished, test = %ExUnit.Test{state: {:excluded, _}}}, state) do
-    test_result = format_test_pass(test) |> Map.put("pending", true)
-
-    if state[:streaming] do
-      event = %{
-        "type" => "test:pending",
-        "test" => test_result
-      }
-
-      write_stream_event(event)
-    end
-
-    {:noreply,
-     %{
-       state
-       | skipped_counter: state[:skipped_counter] + 1,
-         pending: [test_result | state[:pending]]
-     }}
-  end
-
-  # OUTPUT FUNCTIONS
-
-  defp write_output(json, nil), do: IO.puts(json)
-
-  defp write_output(json, output_file) do
-    File.write!(output_file, json)
-  end
-
-  defp write_stream_event(event) do
-    IO.puts(Jason.encode!(event))
-  end
-
-  # FORMATTING FUNCTIONS
   import Exception, only: [format_stacktrace_entry: 1, format_file_line: 3]
 
   @counter_padding ""
@@ -254,6 +40,48 @@ defmodule ExUnitJsonFormatter do
   end
 
   @doc """
+  Formats the suite start streaming event.
+  """
+  def format_suite_start_event(start_time) do
+    %{
+      "type" => "suite:start",
+      "start" => NaiveDateTime.to_iso8601(start_time)
+    }
+  end
+
+  @doc """
+  Formats the suite end streaming event.
+  """
+  def format_suite_end_event(stats) do
+    %{
+      "type" => "suite:end",
+      "stats" => stats
+    }
+  end
+
+  @doc """
+  Formats the final suite result with all test data.
+  """
+  def format_suite_result(stats, tests, failures, pending) do
+    %{
+      "stats" => stats,
+      "tests" => Enum.reverse(tests),
+      "failures" => Enum.reverse(failures),
+      "pending" => Enum.reverse(pending)
+    }
+  end
+
+  @doc """
+  Formats a streaming event for a test.
+  """
+  def format_test_event(type, test_result) do
+    %{
+      "type" => type,
+      "test" => test_result
+    }
+  end
+
+  @doc """
   Receives a test and formats its information
   """
   def format_test_pass(test) do
@@ -262,6 +90,13 @@ defmodule ExUnitJsonFormatter do
     case_str = case |> Atom.to_string() |> String.trim_leading("Elixir.")
 
     %{"title" => name_str, "fullTitle" => "#{case_str}: #{name_str}"}
+  end
+
+  @doc """
+  Formats a skipped or excluded test as pending.
+  """
+  def format_test_pending(test) do
+    format_test_pass(test) |> Map.put("pending", true)
   end
 
   @doc """
@@ -286,6 +121,29 @@ defmodule ExUnitJsonFormatter do
       }
     }
   end
+
+  @doc """
+  Receives a test case and formats its failure.
+  """
+  def format_test_case_failure(test_case, failures) do
+    %ExUnit.TestCase{name: name, tests: tests} = test_case
+    tags = tests |> hd |> Map.get(:tags)
+    title = "#{inspect(name)}: failure on setup_all callback"
+
+    message =
+      Enum.map_join(Enum.with_index(failures), "", fn {{kind, reason, stack}, index} ->
+        {text, stack} = format_kind_reason(test_case, kind, reason, stack, 80)
+        failure_header(failures, index) <> text <> format_stacktrace(stack, name, nil, nil)
+      end)
+
+    %{
+      "title" => title,
+      "fullTitle" => title,
+      "error" => %{"file" => Path.relative_to_cwd(tags[:file]), "message" => message}
+    }
+  end
+
+  # Private formatting functions
 
   defp format_assertion_error(test, struct, stack, width, counter_padding) do
     label_padding_size = if has_value?(struct.right), do: 7, else: 6
@@ -321,27 +179,6 @@ defmodule ExUnitJsonFormatter do
 
   defp report_spacing([_]), do: ""
   defp report_spacing(_), do: "\n"
-
-  @doc """
-  Receives a test case and formats its failure.
-  """
-  def format_test_case_failure(test_case, failures) do
-    %ExUnit.TestCase{name: name, tests: tests} = test_case
-    tags = tests |> hd |> Map.get(:tags)
-    title = "#{inspect(name)}: failure on setup_all callback"
-
-    message =
-      Enum.map_join(Enum.with_index(failures), "", fn {{kind, reason, stack}, index} ->
-        {text, stack} = format_kind_reason(test_case, kind, reason, stack, 80)
-        failure_header(failures, index) <> text <> format_stacktrace(stack, name, nil, nil)
-      end)
-
-    %{
-      "title" => title,
-      "fullTitle" => title,
-      "error" => %{"file" => Path.relative_to_cwd(tags[:file]), "message" => message}
-    }
-  end
 
   defp format_kind_reason(test, :error, %ExUnit.AssertionError{} = struct, stack, width) do
     {format_assertion_error(test, struct, stack, width, @counter_padding), stack}

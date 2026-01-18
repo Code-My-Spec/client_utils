@@ -1,0 +1,3 @@
+[submodule "test/fixtures/test_phoenix_project"]
+	path = fixtures/test_phoenix_project
+	url = https://github.com/johns10/test_phoenix_project.git
