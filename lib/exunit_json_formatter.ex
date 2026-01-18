@@ -65,7 +65,7 @@ defmodule ExUnitJsonFormatter do
       write_stream_event(event)
     end
 
-    json = Poison.encode!(result)
+    json = Jason.encode!(result)
     write_output(json, state[:output_file])
 
     {:noreply, state}
@@ -90,7 +90,7 @@ defmodule ExUnitJsonFormatter do
       write_stream_event(event)
     end
 
-    json = Poison.encode!(result)
+    json = Jason.encode!(result)
     write_output(json, state[:output_file])
 
     {:noreply, state}
@@ -213,7 +213,7 @@ defmodule ExUnitJsonFormatter do
   end
 
   defp write_stream_event(event) do
-    IO.puts(Poison.encode!(event))
+    IO.puts(Jason.encode!(event))
   end
 
   # FORMATTING FUNCTIONS
