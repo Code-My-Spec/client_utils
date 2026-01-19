@@ -25,8 +25,8 @@ defmodule Mix.Tasks.AgentTest do
   @shortdoc "Runs tests with queuing support for concurrent requests"
   @lock_file "agent_test.lock.json"
   @callers_dir "agent_test_callers"
-  @log_dir ".client_utils"
-  @log_file ".client_utils/agent_test.log"
+  @log_dir ".code_my_spec"
+  @log_file ".code_my_spec/agent_test.log"
 
   def run(argv) do
     setup_logger()

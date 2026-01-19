@@ -174,7 +174,7 @@ defmodule Mix.Tasks.AgentTestTest do
       #
       # All three should complete without failure
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       File.rm(debug_log)
 
       # Also clean up any stale files in the fixture project
@@ -284,7 +284,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: All three tasks request the same file
       # Expected: Only one test run, other two replay from cache
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -314,7 +314,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests A, Task 2 requests B, Task 3 requests A
       # Expected: Task 1 runs A, Task 2 runs B (no overlap), Task 3 replays A
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -345,7 +345,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests file A, Task 2 requests all files
       # Expected: Both should run tests (Task 2 can't reuse partial results)
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -372,7 +372,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests all files, Task 2 requests file A
       # Expected: Task 1 runs all, Task 2 replays (subset of cached results)
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -401,7 +401,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests files A and B, Task 2 requests files B and C
       # Expected: Both should run tests (Task 2 needs C which wasn't in Task 1)
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -430,7 +430,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: A lock file exists from a crashed process
       # Expected: New task should detect stale lock and become runner
 
-      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       # Create a stale lock file with a non-existent PID
@@ -501,7 +501,7 @@ defmodule Mix.Tasks.AgentTestTest do
   end
 
   defp cleanup_fixture_files(_debug_log) do
-    File.rm_rf(Path.join(@fixture_project_path, ".client_utils"))
+    File.rm_rf(Path.join(@fixture_project_path, ".code_my_spec"))
     File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
     File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
     File.rm_rf(Path.join(@fixture_project_path, "agent_test_callers"))
