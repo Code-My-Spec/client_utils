@@ -16,15 +16,17 @@ defmodule ClientUtils.TestFormatter do
   def init(opts) do
     output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
 
-    # Setup DETS for caching
+    # Setup cache
     TestCache.setup()
 
     # Start CLIFormatter for normal terminal output
     # CLIFormatter expects specific config keys with defaults
     cli_opts =
       opts
-      |> Keyword.take([:seed, :trace, :colors, :width, :slowest, :max_failures])
+      |> Keyword.take([:seed, :trace, :colors, :width, :slowest, :slowest_modules, :max_failures])
       |> Keyword.put_new(:colors, [])
+      |> Keyword.put_new(:slowest, 0)
+      |> Keyword.put_new(:slowest_modules, 0)
 
     {:ok, cli_formatter} = GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
@@ -58,7 +60,7 @@ defmodule ClientUtils.TestFormatter do
   end
 
   def handle_cast({:suite_finished, run_us, load_us} = event, state) do
-    # Flush cached events to DETS
+    # Flush cached events
     TestCache.store_events(state.events)
 
     # Write JSON to file if configured
@@ -78,7 +80,7 @@ defmodule ClientUtils.TestFormatter do
   end
 
   def handle_cast({:suite_finished, %{run: run_us, load: load_us}} = event, state) do
-    # Flush cached events to DETS
+    # Flush cached events
     TestCache.store_events(state.events)
 
     # Write JSON to file if configured

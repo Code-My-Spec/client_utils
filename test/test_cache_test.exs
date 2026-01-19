@@ -4,8 +4,12 @@ defmodule ClientUtils.TestFormatter.TestCacheTest do
   alias ClientUtils.TestFormatter.TestCache
 
   setup do
-    TestCache.ensure_started()
     TestCache.clear()
+
+    on_exit(fn ->
+      TestCache.destroy()
+    end)
+
     :ok
   end
 

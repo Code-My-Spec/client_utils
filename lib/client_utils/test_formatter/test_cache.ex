@@ -1,59 +1,61 @@
 defmodule ClientUtils.TestFormatter.TestCache do
   @moduledoc """
-  Caches test events to DETS, keyed by file.
+  Caches test events to a JSON file, keyed by file.
   Callers can query: "was file X tested after time Y?"
 
-  Uses DETS for persistent storage that can be shared between
-  separate Erlang VM instances (e.g., for distributed test scenarios).
+  Uses JSON files for persistent storage that can be shared between
+  separate Erlang VM instances.
+
+  Events are stored as base64-encoded Erlang terms to preserve
+  all type information (tuples, structs, etc).
   """
 
-  @events_table :test_events
-  @default_dets_file "agent_test_cache.dets"
+  @default_events_file "agent_test_events.json"
 
   @doc """
-  Returns the DETS file path.
-  Can be configured via AGENT_TEST_CACHE_FILE environment variable.
+  Returns the events file path.
+  Can be configured via AGENT_TEST_EVENTS_FILE environment variable.
   """
-  def cache_file do
-    System.get_env("AGENT_TEST_CACHE_FILE") || @default_dets_file
+  def events_file do
+    System.get_env("AGENT_TEST_EVENTS_FILE") || @default_events_file
   end
 
   @doc """
-  Ensures DETS table is open and ready.
+  No-op for compatibility. JSON files don't need setup.
   """
-  def ensure_started do
-    file = cache_file() |> String.to_charlist()
-
-    case :dets.open_file(@events_table, file: file, type: :bag) do
-      {:ok, @events_table} -> :ok
-      {:error, {:already_open, @events_table}} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
+  def ensure_started, do: :ok
 
   @doc """
-  Sets up DETS. Called during formatter init.
+  No-op for compatibility. JSON files don't need setup.
   """
-  def setup do
-    ensure_started()
-  end
+  def setup, do: :ok
 
   @doc """
-  Stores a batch of events to DETS, keyed by file and timestamp.
+  Stores a batch of events to the JSON file as a new run.
+  `for_callers` is a list of PIDs (as strings) that this run is for.
   """
-  def store_events(events, tested_at \\ DateTime.utc_now()) do
-    ensure_started()
-    timestamp = to_unix(tested_at)
+  def store_events(events, for_callers \\ [], tested_at \\ DateTime.utc_now()) do
+    data = read_events_file()
 
-    for event <- events do
-      file = extract_file(event)
+    new_run = %{
+      "completed_at" => DateTime.to_iso8601(tested_at),
+      "for_callers" => for_callers,
+      "events" =>
+        events
+        |> Enum.map(fn event ->
+          file = extract_file(event)
 
-      if file do
-        :dets.insert(@events_table, {file, timestamp, event})
-      end
-    end
+          %{
+            "file" => file,
+            "event" => encode_event(event)
+          }
+        end)
+        |> Enum.filter(fn %{"file" => file} -> file != nil end)
+    }
 
-    :dets.sync(@events_table)
+    updated_data = %{data | "runs" => data["runs"] ++ [new_run]}
+    write_events_file(updated_data)
+
     :ok
   end
 
@@ -61,16 +63,33 @@ defmodule ClientUtils.TestFormatter.TestCache do
   Gets all events for a file that were recorded after the given time.
   """
   def get_events_for_file(file, after_time) do
-    ensure_started()
-    timestamp = to_unix(after_time)
+    data = read_events_file()
+    after_timestamp = to_unix(after_time)
 
-    # Get all entries for this file
-    entries = :dets.lookup(@events_table, file)
+    data["runs"]
+    |> Enum.filter(fn run ->
+      run_timestamp = run["completed_at"] |> parse_iso8601() |> to_unix()
+      run_timestamp > after_timestamp
+    end)
+    |> Enum.flat_map(fn run -> run["events"] end)
+    |> Enum.filter(fn %{"file" => f} -> f == file end)
+    |> Enum.map(fn %{"event" => encoded} -> decode_event(encoded) end)
+  end
 
-    # Filter to only those after the requested time and extract events
-    entries
-    |> Enum.filter(fn {_file, ts, _event} -> ts > timestamp end)
-    |> Enum.map(fn {_file, _ts, event} -> event end)
+  @doc """
+  Gets all events from runs completed after the given time.
+  """
+  def get_events_after(after_time) do
+    data = read_events_file()
+    after_timestamp = to_unix(after_time)
+
+    data["runs"]
+    |> Enum.filter(fn run ->
+      run_timestamp = run["completed_at"] |> parse_iso8601() |> to_unix()
+      run_timestamp > after_timestamp
+    end)
+    |> Enum.flat_map(fn run -> run["events"] end)
+    |> Enum.map(fn %{"event" => encoded} -> decode_event(encoded) end)
   end
 
   @doc """
@@ -85,7 +104,10 @@ defmodule ClientUtils.TestFormatter.TestCache do
 
   @doc """
   Returns true if all files were tested after the given time.
+  If files is empty, returns true (vacuous truth).
   """
+  def files_tested_after?([], _requested_at), do: true
+
   def files_tested_after?(files, requested_at) do
     Enum.all?(files, &file_tested_after?(&1, requested_at))
   end
@@ -104,20 +126,38 @@ defmodule ClientUtils.TestFormatter.TestCache do
   end
 
   @doc """
-  Clears all cached events.
+  Returns a summary of all cached files with their timestamps.
+  Useful for debugging. Returns a list of {file, min_timestamp, max_timestamp, event_count}.
   """
-  def clear do
-    ensure_started()
-    :dets.delete_all_objects(@events_table)
-    :dets.sync(@events_table)
+  def list_cached_files do
+    data = read_events_file()
+
+    data["runs"]
+    |> Enum.flat_map(fn run ->
+      completed_at = run["completed_at"]
+
+      run["events"]
+      |> Enum.map(fn %{"file" => file} -> {file, completed_at} end)
+    end)
+    |> Enum.group_by(fn {file, _} -> file end, fn {_, ts} -> ts end)
+    |> Enum.map(fn {file, timestamps} ->
+      {file, Enum.min(timestamps), Enum.max(timestamps), length(timestamps)}
+    end)
+    |> Enum.sort()
   end
 
   @doc """
-  Closes and deletes the DETS file entirely. Useful for test cleanup.
+  Clears all cached events.
+  """
+  def clear do
+    write_events_file(%{"runs" => []})
+  end
+
+  @doc """
+  Deletes the events file entirely. Useful for cleanup.
   """
   def destroy do
-    :dets.close(@events_table)
-    file = cache_file()
+    file = events_file()
 
     if File.exists?(file) do
       File.rm!(file)
@@ -127,13 +167,57 @@ defmodule ClientUtils.TestFormatter.TestCache do
   end
 
   @doc """
-  Closes the DETS table.
+  No-op for compatibility. JSON files don't need closing.
   """
-  def close do
-    :dets.close(@events_table)
+  def close, do: :ok
+
+  # Private functions
+
+  defp read_events_file do
+    file = events_file()
+
+    case File.read(file) do
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, data} when is_map(data) -> ensure_structure(data)
+          _ -> %{"runs" => []}
+        end
+
+      {:error, _} ->
+        %{"runs" => []}
+    end
   end
 
-  # Convert DateTime to Unix timestamp (microseconds for precision)
+  defp write_events_file(data) do
+    file = events_file()
+    tmp_file = file <> ".tmp"
+
+    # Atomic write: write to temp file, then rename
+    File.write!(tmp_file, Jason.encode!(data, pretty: true))
+    File.rename!(tmp_file, file)
+  end
+
+  defp ensure_structure(data) do
+    %{"runs" => data["runs"] || []}
+  end
+
+  defp encode_event(event) do
+    event
+    |> :erlang.term_to_binary()
+    |> Base.encode64()
+  end
+
+  defp decode_event(encoded) do
+    encoded
+    |> Base.decode64!()
+    |> :erlang.binary_to_term()
+  end
+
+  defp parse_iso8601(iso_string) do
+    {:ok, datetime, _} = DateTime.from_iso8601(iso_string)
+    datetime
+  end
+
   defp to_unix(%DateTime{} = dt), do: DateTime.to_unix(dt, :microsecond)
   defp to_unix(unix) when is_integer(unix), do: unix
 end

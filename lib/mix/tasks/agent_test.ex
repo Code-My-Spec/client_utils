@@ -22,144 +22,214 @@ defmodule Mix.Tasks.AgentTest do
 
   @shortdoc "Runs tests with queuing support for concurrent requests"
   @lock_file "agent_test.lock.json"
-  @queue_file "agent_test.queue.json"
+  @callers_dir "agent_test_callers"
+  @debug_log "agent_test_debug.log"
+
+  defp log(message) do
+    timestamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    pid = System.pid()
+    line = "[#{timestamp}] [PID:#{pid}] #{message}\n"
+    File.write!(@debug_log, line, [:append])
+  end
 
   def run(argv) do
+    log("run() called with argv=#{inspect(argv)}")
     requested_at = DateTime.utc_now()
     files = extract_files(argv)
+    my_pid = System.pid()
 
-    if locked?() do
-      queue_request(files)
-      wait_and_replay(files, requested_at, argv)
-    else
-      run_tests(files)
-      process_queue()
+    with :ok <- create_caller_file(my_pid, files, requested_at),
+         :ok <- wait_current_run(),
+         {:ok, role} <- get_role(my_pid),
+         :ok <- run_or_wait(role, files),
+         :ok <- maybe_replay_results(role, files, requested_at) do
+      delete_caller_file(my_pid)
+      log("run() complete")
+      :ok
     end
   end
 
-  defp run_tests(files) do
+  # Step 1: Register ourselves as a caller
+  defp create_caller_file(pid, files, requested_at) do
+    log("create_caller_file() pid=#{pid} files=#{inspect(files)}")
+    File.mkdir_p!(@callers_dir)
+
+    caller_data =
+      Jason.encode!(%{
+        pid: pid,
+        files: files,
+        requested_at: DateTime.to_iso8601(requested_at)
+      })
+
+    File.write!(caller_file_path(pid), caller_data)
+    :ok
+  end
+
+  # Step 2: Wait for any current test run to finish
+  defp wait_current_run do
+    case get_locker_pid() do
+      nil ->
+        log("wait_current_run() no current run")
+        :ok
+
+      locker_pid ->
+        log("wait_current_run() waiting for #{locker_pid}")
+        wait_for_process(locker_pid)
+    end
+  end
+
+  defp get_locker_pid do
+    case File.read(@lock_file) do
+      {:error, :enoent} ->
+        nil
+
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, %{"pid" => pid}} -> if process_alive?(pid), do: pid, else: nil
+          _ -> nil
+        end
+    end
+  end
+
+  defp wait_for_process(locker_pid) do
+    if process_alive?(locker_pid) do
+      Process.sleep(100)
+      wait_for_process(locker_pid)
+    else
+      log("wait_for_process() #{locker_pid} finished")
+      :ok
+    end
+  end
+
+  # Step 3: Acquire lock - we're either runner or waiter
+  defp get_role(my_pid) do
+    case File.read(@lock_file) do
+      {:error, :enoent} ->
+        # No lock - we're the runner
+        log("get_role() no lock, becoming runner")
+        write_lock_file(my_pid)
+        {:ok, :runner}
+
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, %{"pid" => pid}} when pid == my_pid ->
+            # We already have the lock (shouldn't happen but handle it)
+            log("get_role() already have lock, runner")
+            {:ok, :runner}
+
+          {:ok, %{"pid" => locker_pid}} ->
+            if process_alive?(locker_pid) do
+              # Someone else got it first - we're a waiter
+              log("get_role() lock held by #{locker_pid}, becoming waiter")
+              {:ok, :waiter}
+            else
+              # Stale lock - take it
+              log("get_role() stale lock from #{locker_pid}, becoming runner")
+              write_lock_file(my_pid)
+              {:ok, :runner}
+            end
+
+          _ ->
+            # Invalid lock - take it
+            log("get_role() invalid lock, becoming runner")
+            write_lock_file(my_pid)
+            {:ok, :runner}
+        end
+    end
+  end
+
+  defp write_lock_file(pid) do
     lock_data =
       Jason.encode!(%{
-        started_at: DateTime.utc_now() |> DateTime.to_iso8601(),
-        pid: System.pid()
+        pid: pid,
+        started_at: DateTime.utc_now() |> DateTime.to_iso8601()
       })
 
     File.write!(@lock_file, lock_data)
+  end
+
+  # Step 4: Run tests if we're the runner
+  defp run_or_wait(:runner, files) do
+    log("run_or_wait() runner, running tests with files=#{inspect(files)}")
 
     try do
       test_argv = ["--formatter", "ClientUtils.TestFormatter" | files]
-      Mix.Task.run("test", test_argv)
+      log("run_or_wait() calling Mix.Tasks.Test.run with #{inspect(test_argv)}")
+      # Call the test task directly to bypass any aliases
+      Mix.Tasks.Test.run(test_argv)
+      log("run_or_wait() tests complete")
+      :ok
     after
       File.rm(@lock_file)
+      log("run_or_wait() lock released")
     end
   end
 
-  defp process_queue do
-    queue = read_queue()
+  defp run_or_wait(:waiter, _files) do
+    log("run_or_wait() waiter, skipping test run")
+    :ok
+  end
 
-    if queue != [] do
-      # Consolidate all queued files
-      all_files =
-        queue
-        |> Enum.flat_map(fn entry -> entry["files"] || [] end)
-        |> Enum.uniq()
+  # Step 5: Replay results from the events cache (only for waiters)
+  defp maybe_replay_results(:runner, _files, _requested_at) do
+    # Runner already saw output from the test run
+    log("maybe_replay_results() runner, skipping replay")
+    :ok
+  end
 
-      # Clear queue before running
-      File.rm(@queue_file)
+  defp maybe_replay_results(:waiter, files, requested_at) do
+    events =
+      if files == [] do
+        TestCache.get_events_after(requested_at)
+      else
+        Enum.flat_map(files, &TestCache.get_events_for_file(&1, requested_at))
+      end
 
-      # Run consolidated tests
-      run_tests(all_files)
+    log("maybe_replay_results() waiter, found #{length(events)} events")
+
+    if events != [] do
+      replay_to_cli(events)
     end
+
+    :ok
   end
 
-  defp wait_and_replay(files, requested_at, opts) do
-    Mix.shell().info("Tests running. Waiting for results...")
+  defp replay_to_cli(events) do
+    log("replay_to_cli() replaying #{length(events)} events")
 
-    TestCache.ensure_started()
-    wait_for_completion(files, requested_at)
-
-    Mix.shell().info("Results ready. Replaying...")
-    replay_to_cli(files, requested_at, opts)
-  end
-
-  defp replay_to_cli(files, requested_at, opts) do
-    cli_opts =
-      opts
-      |> Enum.filter(fn
-        "--" <> _ -> false
-        _ -> false
-      end)
-      |> Keyword.new(fn _ -> {:colors, []} end)
-      |> Keyword.put_new(:colors, [])
+    cli_opts = [
+      colors: [],
+      slowest: 0,
+      slowest_modules: 0,
+      seed: 0,
+      trace: false,
+      width: 80
+    ]
 
     {:ok, cli} = GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
     GenServer.cast(cli, {:suite_started, cli_opts})
 
-    events =
-      files
-      |> Enum.flat_map(&TestCache.get_events_for_file(&1, requested_at))
-
     for event <- events do
       GenServer.cast(cli, event)
     end
 
-    GenServer.cast(cli, {:suite_finished, %{run: 0, load: 0}})
+    GenServer.cast(cli, {:suite_finished, %{run: 0, load: 0, async: 0}})
   end
 
-  defp wait_for_completion(files, requested_at) do
-    unless TestCache.files_tested_after?(files, requested_at) do
-      Process.sleep(500)
-      wait_for_completion(files, requested_at)
-    end
-  end
+  # Caller file management
+  defp caller_file_path(pid), do: Path.join(@callers_dir, "#{pid}.json")
+  defp delete_caller_file(pid), do: File.rm(caller_file_path(pid))
 
-  defp locked? do
-    case File.read(@lock_file) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, %{"pid" => pid}} -> process_alive?(pid)
-          _ -> false
-        end
-
-      {:error, _} ->
-        false
-    end
-  end
-
+  # Utilities
   defp process_alive?(pid) do
-    {_, exit_code} = System.cmd("kill", ["-0", pid], stderr_to_stdout: true)
+    {_, exit_code} = System.cmd("kill", ["-0", to_string(pid)], stderr_to_stdout: true)
     exit_code == 0
   end
 
-  defp queue_request(files) do
-    queue = read_queue()
-
-    entry = %{
-      files: files,
-      requested_at: DateTime.utc_now() |> DateTime.to_iso8601()
-    }
-
-    updated_queue = queue ++ [entry]
-    File.write!(@queue_file, Jason.encode!(updated_queue, pretty: true))
-  end
-
-  defp read_queue do
-    case File.read(@queue_file) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, queue} when is_list(queue) -> queue
-          _ -> []
-        end
-
-      {:error, _} ->
-        []
-    end
-  end
-
   defp extract_files(argv) do
-    Enum.filter(argv, fn arg ->
-      String.ends_with?(arg, ".exs") or String.ends_with?(arg, ".ex")
-    end)
+    argv
+    |> Enum.filter(&(String.ends_with?(&1, ".exs") or String.ends_with?(&1, ".ex")))
+    |> Enum.map(&Path.expand/1)
   end
 end
