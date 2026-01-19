@@ -174,7 +174,7 @@ defmodule Mix.Tasks.AgentTestTest do
       #
       # All three should complete without failure
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       File.rm(debug_log)
 
       # Also clean up any stale files in the fixture project
@@ -204,13 +204,12 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "info"}
+                {"LOG_LEVEL", "warning"}
               ],
               stderr_to_stdout: true
             )
 
           Logger.info("Task 1 completed with exit code #{exit_code}")
-          IO.puts("=== Task 1 output ===\n#{output}\n=== End Task 1 ===")
           {output, exit_code}
         end)
 
@@ -229,13 +228,12 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "info"}
+                {"LOG_LEVEL", "warning"}
               ],
               stderr_to_stdout: true
             )
 
           Logger.info("Task 2 completed with exit code #{exit_code}")
-          IO.puts("=== Task 2 output ===\n#{output}\n=== End Task 2 ===")
           {output, exit_code}
         end)
 
@@ -253,13 +251,12 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "info"}
+                {"LOG_LEVEL", "warning"}
               ],
               stderr_to_stdout: true
             )
 
           Logger.info("Task 3 completed with exit code #{exit_code}")
-          IO.puts("=== Task 3 output ===\n#{output}\n=== End Task 3 ===")
           {output, exit_code}
         end)
 
@@ -268,14 +265,6 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Extract results
       [{output1, exit1}, {output2, exit2}, {output3, exit3}] = results
-
-      # Print debug log for analysis
-      if File.exists?(debug_log) do
-        log_content = File.read!(debug_log)
-        IO.puts("\n=== DEBUG LOG ===\n#{log_content}\n=== END DEBUG LOG ===")
-      else
-        IO.puts("\n=== DEBUG LOG NOT FOUND ===")
-      end
 
       # All three should succeed (exit code 0)
       # If any fail, include output in assertion message for debugging
@@ -295,7 +284,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: All three tasks request the same file
       # Expected: Only one test run, other two replay from cache
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -325,7 +314,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests A, Task 2 requests B, Task 3 requests A
       # Expected: Task 1 runs A, Task 2 runs B (no overlap), Task 3 replays A
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -356,7 +345,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests file A, Task 2 requests all files
       # Expected: Both should run tests (Task 2 can't reuse partial results)
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -383,7 +372,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests all files, Task 2 requests file A
       # Expected: Task 1 runs all, Task 2 replays (subset of cached results)
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -412,7 +401,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests files A and B, Task 2 requests files B and C
       # Expected: Both should run tests (Task 2 needs C which wasn't in Task 1)
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -441,7 +430,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: A lock file exists from a crashed process
       # Expected: New task should detect stale lock and become runner
 
-      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      debug_log = Path.join(@fixture_project_path, ".client_utils/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       # Create a stale lock file with a non-existent PID
@@ -511,8 +500,8 @@ defmodule Mix.Tasks.AgentTestTest do
     exit_code == 0
   end
 
-  defp cleanup_fixture_files(debug_log) do
-    File.rm(debug_log)
+  defp cleanup_fixture_files(_debug_log) do
+    File.rm_rf(Path.join(@fixture_project_path, ".client_utils"))
     File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
     File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
     File.rm_rf(Path.join(@fixture_project_path, "agent_test_callers"))
@@ -552,13 +541,12 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "info"}
+                {"LOG_LEVEL", "warning"}
               ],
               stderr_to_stdout: true
             )
 
           Logger.info("#{name} completed with exit code #{exit_code}")
-          IO.puts("=== #{name} output ===\n#{output}\n=== End #{name} ===")
           {output, exit_code}
         end)
       end)
@@ -568,11 +556,8 @@ defmodule Mix.Tasks.AgentTestTest do
 
     # Read debug log
     log_content = if File.exists?(debug_log) do
-      content = File.read!(debug_log)
-      IO.puts("\n=== DEBUG LOG ===\n#{content}\n=== END DEBUG LOG ===")
-      content
+      File.read!(debug_log)
     else
-      IO.puts("\n=== DEBUG LOG NOT FOUND ===")
       ""
     end
 

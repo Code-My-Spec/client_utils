@@ -4,7 +4,7 @@ An ExUnit formatter with JSON output and distributed test coordination. Designed
 
 ## Features
 
-- **JSON Output** - Machine-readable test results compatible with [mocha-json-streamier-reporter](https://github.com/plasticine/mocha-json-streamier-reporter)
+- **JSON Output** - Machine-readable test results
 - **Streaming Mode** - Real-time JSON events as tests complete
 - **Distributed Test Coordination** - Multiple concurrent test requests are serialized, with results cached and replayed to waiting callers
 - **CLI Passthrough** - Standard ExUnit terminal output is preserved
@@ -96,26 +96,30 @@ The `mix agent_test` task coordinates multiple concurrent test requests. This is
 
 ### How It Works
 
-```
-┌─────────────────┐                    ┌─────────────────┐
-│   Agent 1       │                    │   Agent 2       │
-│   (Runner)      │                    │   (Waiter)      │
-└────────┬────────┘                    └────────┬────────┘
-         │                                      │
-         ├── Register as caller ───────────────►├── Register as caller
-         │                                      │
-         ├── Acquire lock                       ├── Lock busy, wait
-         │                                      │
-         ├── Run tests ─────────────────────────│
-         │      │                               │
-         │      ├─► Terminal output             │
-         │      └─► Cache events                │
-         │                                      │
-         ├── Release lock ──────────────────────│
-         │                                      │
-         │                                      ├── Read cached events
-         │                                      ├── Replay to terminal
-         ▼                                      ▼
+```mermaid
+sequenceDiagram
+    participant A1 as Agent 1 (Runner)
+    participant A2 as Agent 2 (Waiter)
+    participant Lock as Lock File
+    participant Cache as Event Cache
+    participant Tests as Mix Test
+
+    A1->>Lock: Create caller file
+    A2->>Lock: Create caller file
+
+    A1->>Lock: Acquire lock
+    A2->>Lock: Fail acquire lock
+
+    A2->>A2: Wait
+
+    A1->>Tests: Run mix test with custom formatter
+    Tests-->>A1: Stream test events to terminal
+    Tests->>Cache: Store events
+    A1->>Lock: Release lock
+
+    A2->>Cache: Get events for my files after my timestamp
+    Cache-->>A2: Return cached events
+    A2->>A2: Replay events to CLI formatter
 ```
 
 - **Runner**: First caller acquires the lock, runs tests normally, caches all test events
@@ -147,11 +151,11 @@ TestCache.get_events_after(since)
 
 ## Configuration
 
-| Environment Variable | Description |
-|---------------------|-------------|
-| `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file |
-| `EXUNIT_JSON_STREAMING` | Enable streaming mode |
-| `AGENT_TEST_EVENTS_FILE` | Custom path for event cache |
+| Environment Variable      | Description                 |
+| ------------------------- | --------------------------- |
+| `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file   |
+| `EXUNIT_JSON_STREAMING`   | Enable streaming mode       |
+| `AGENT_TEST_EVENTS_FILE`  | Custom path for event cache |
 
 ## License
 
