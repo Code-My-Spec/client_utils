@@ -1,112 +1,158 @@
-# ExUnitJsonFormatter
+# ClientUtils
 
-An ExUnit formatter that outputs a series of JSON objects.
+An ExUnit formatter with JSON output and distributed test coordination. Designed for editor integrations and CI/CD pipelines that need machine-readable test results and the ability to handle concurrent test requests.
 
-Inspired and designed to be compatible with mocha-json-streamier-reporter
+## Features
+
+- **JSON Output** - Machine-readable test results compatible with [mocha-json-streamier-reporter](https://github.com/plasticine/mocha-json-streamier-reporter)
+- **Streaming Mode** - Real-time JSON events as tests complete
+- **Distributed Test Coordination** - Multiple concurrent test requests are serialized, with results cached and replayed to waiting callers
+- **CLI Passthrough** - Standard ExUnit terminal output is preserved
 
 ## Installation
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `exunit_json_formatter` to your list of dependencies in `mix.exs`:
-
 ```elixir
 def deps do
-  [{:exunit_json_formatter, "~> 0.1.0"}]
+  [{:client_utils, "~> 0.1.0"}]
 end
 ```
 
-## Usage
-
-### Output to stdout (default)
+## Basic Usage
 
 Configure the formatter in `test/test_helper.exs`:
 
 ```elixir
-ExUnit.start(formatters: [ExUnitJsonFormatter])
+ExUnit.start(formatters: [ClientUtils.TestFormatter])
 ```
 
-### Output to file
-
-There are multiple ways to configure file output:
-
-#### 1. Via test_helper.exs (recommended)
+### File Output
 
 ```elixir
-ExUnit.start(formatters: [{ExUnitJsonFormatter, output_file: "test-results.json"}])
+ExUnit.start(formatters: [{ClientUtils.TestFormatter, output_file: "test-results.json"}])
 ```
 
-#### 2. Via environment variable
+Or via environment variable:
 
 ```bash
-EXUNIT_JSON_OUTPUT_FILE=test-results.json mix test --formatter ExUnitJsonFormatter
+EXUNIT_JSON_OUTPUT_FILE=test-results.json mix test
 ```
 
-or
+### Streaming Mode
 
-```bash
-export EXUNIT_JSON_OUTPUT_FILE=test-results.json
-mix test --formatter ExUnitJsonFormatter
-```
-
-#### 3. Via mix.exs configuration
+Stream test events in real-time while writing the final summary to a file:
 
 ```elixir
-def project do
-  [
-    # ...
-    test_coverage: [
-      tool: ExUnitJsonFormatter,
-      output_file: "test-results.json"
-    ]
-  ]
-end
+ExUnit.start(formatters: [{ClientUtils.TestFormatter, streaming: true, output_file: "test-results.json"}])
 ```
 
-**Note:** Options specified in `test_helper.exs` take precedence over environment variables.
+## JSON Output Format
 
-File output is useful when you need clean JSON output separate from test logs and other CLI output.
-
-### Streaming mode
-
-Streaming mode emits individual JSON events to stdout as tests complete, while still generating the final summary blob at the end.
-
-#### Via test_helper.exs
-
-```elixir
-ExUnit.start(formatters: [{ExUnitJsonFormatter, streaming: true, output_file: "test-results.json"}])
-```
-
-#### Via environment variable
-
-```bash
-EXUNIT_JSON_STREAMING=true EXUNIT_JSON_OUTPUT_FILE=test-results.json mix test --formatter ExUnitJsonFormatter
-```
-
-or
-
-```bash
-export EXUNIT_JSON_STREAMING=true
-export EXUNIT_JSON_OUTPUT_FILE=test-results.json
-mix test --formatter ExUnitJsonFormatter
-```
-
-In streaming mode:
-- Individual test events are streamed to stdout as they happen (`test:pass`, `test:fail`, `test:pending`)
-- Suite events are emitted to stdout (`suite:start`, `suite:end`)
-- The final complete JSON summary is written to the output file (or stdout if no file is configured)
-
-This is useful when you want real-time feedback on test execution while also generating a complete test report.
-
-#### Example streaming output
+### Final Summary
 
 ```json
-{"type":"suite:start","start":"2024-01-01T12:00:00.000000"}
-{"type":"test:pass","test":{"title":"should work","fullTitle":"MyModule: should work"}}
-{"type":"test:fail","test":{"title":"should fail","fullTitle":"MyModule: should fail","error":{...}}}
-{"type":"suite:end","stats":{...}}
-{"stats":{...},"tests":[...],"failures":[...],"pending":[...]}
+{
+  "stats": {
+    "duration": 1234.56,
+    "start": "2024-01-15T10:30:00.000000",
+    "end": "2024-01-15T10:30:01.234000",
+    "passes": 40,
+    "failures": 2,
+    "pending": 3,
+    "tests": 45,
+    "suites": 5
+  },
+  "tests": [
+    {"title": "test name", "fullTitle": "ModuleName: test name"}
+  ],
+  "failures": [
+    {
+      "title": "failing test",
+      "fullTitle": "ModuleName: failing test",
+      "error": {
+        "file": "test/my_test.exs",
+        "line": 42,
+        "message": "Assertion failed"
+      }
+    }
+  ],
+  "pending": [
+    {"title": "skipped test", "fullTitle": "ModuleName: skipped test", "pending": true}
+  ]
+}
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at [https://hexdocs.pm/exunit_json_formatter](https://hexdocs.pm/exunit_json_formatter).
+### Streaming Events
+
+```json
+{"type":"suite:start","start":"2024-01-15T10:30:00.000000"}
+{"type":"test:pass","test":{"title":"works","fullTitle":"MyModule: works"}}
+{"type":"test:fail","test":{"title":"breaks","fullTitle":"MyModule: breaks","error":{...}}}
+{"type":"suite:end","stats":{...}}
+```
+
+## Distributed Test Coordination
+
+The `mix agent_test` task coordinates multiple concurrent test requests. This is useful for editor integrations where multiple "run test" commands might be triggered in quick succession.
+
+### How It Works
+
+```
+┌─────────────────┐                    ┌─────────────────┐
+│   Agent 1       │                    │   Agent 2       │
+│   (Runner)      │                    │   (Waiter)      │
+└────────┬────────┘                    └────────┬────────┘
+         │                                      │
+         ├── Register as caller ───────────────►├── Register as caller
+         │                                      │
+         ├── Acquire lock                       ├── Lock busy, wait
+         │                                      │
+         ├── Run tests ─────────────────────────│
+         │      │                               │
+         │      ├─► Terminal output             │
+         │      └─► Cache events                │
+         │                                      │
+         ├── Release lock ──────────────────────│
+         │                                      │
+         │                                      ├── Read cached events
+         │                                      ├── Replay to terminal
+         ▼                                      ▼
+```
+
+- **Runner**: First caller acquires the lock, runs tests normally, caches all test events
+- **Waiter**: Subsequent callers wait for the runner to finish, then receive cached results for their requested files
+
+### Usage
+
+```bash
+mix agent_test test/my_test.exs
+```
+
+Multiple concurrent invocations are automatically coordinated—only one runs tests at a time, others receive cached results.
+
+### Cache API
+
+Query the test cache programmatically:
+
+```elixir
+alias ClientUtils.TestFormatter.TestCache
+
+# Check if files were tested recently
+TestCache.file_tested_after?("test/my_test.exs", datetime)
+TestCache.files_tested_after?(["test/a.exs", "test/b.exs"], datetime)
+
+# Retrieve cached events
+TestCache.get_events_for_file("test/my_test.exs", since)
+TestCache.get_events_after(since)
+```
+
+## Configuration
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file |
+| `EXUNIT_JSON_STREAMING` | Enable streaming mode |
+| `AGENT_TEST_EVENTS_FILE` | Custom path for event cache |
+
+## License
+
+Apache 2.0
