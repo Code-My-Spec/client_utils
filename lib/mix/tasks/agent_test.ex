@@ -40,7 +40,7 @@ defmodule Mix.Tasks.AgentTest do
 
     with :ok <- create_caller_file(my_pid, files, requested_at),
          :ok <- wait_current_run(),
-         {:ok, role} <- get_role(my_pid),
+         {:ok, role} <- get_role(my_pid, files, requested_at),
          :ok <- run_or_wait(role, files),
          :ok <- maybe_replay_results(role, files, requested_at) do
       delete_caller_file(my_pid)
@@ -102,13 +102,12 @@ defmodule Mix.Tasks.AgentTest do
   end
 
   # Step 3: Acquire lock - we're either runner or waiter
-  defp get_role(my_pid) do
+  # Key insight: if cache already has events for our files, become waiter
+  defp get_role(my_pid, files, requested_at) do
     case File.read(@lock_file) do
       {:error, :enoent} ->
-        # No lock - we're the runner
-        log("get_role() no lock, becoming runner")
-        write_lock_file(my_pid)
-        {:ok, :runner}
+        # No lock - check if cache already has our results
+        maybe_become_runner_or_waiter(my_pid, files, requested_at)
 
       {:ok, content} ->
         case Jason.decode(content) do
@@ -123,25 +122,51 @@ defmodule Mix.Tasks.AgentTest do
               log("get_role() lock held by #{locker_pid}, becoming waiter")
               {:ok, :waiter}
             else
-              # Stale lock - take it
-              log("get_role() stale lock from #{locker_pid}, becoming runner")
-              write_lock_file(my_pid)
-              {:ok, :runner}
+              # Stale lock - check cache before taking
+              maybe_become_runner_or_waiter(my_pid, files, requested_at)
             end
 
           _ ->
-            # Invalid lock - take it
-            log("get_role() invalid lock, becoming runner")
-            write_lock_file(my_pid)
-            {:ok, :runner}
+            # Invalid lock - check cache before taking
+            maybe_become_runner_or_waiter(my_pid, files, requested_at)
         end
     end
   end
 
-  defp write_lock_file(pid) do
+  # Check if cache has events for all our files; if so, become waiter
+  defp maybe_become_runner_or_waiter(my_pid, files, requested_at) do
+    cond do
+      # Empty files = "all tests" - must run
+      files == [] ->
+        log("get_role() no lock, all files requested, becoming runner")
+        write_lock_file(my_pid, files)
+        {:ok, :runner}
+
+      # Specific files - check if cache covers them
+      files_covered_by_cache?(files, requested_at) ->
+        log("get_role() no lock but cache covers our files, becoming waiter")
+        {:ok, :waiter}
+
+      # Not covered - become runner
+      true ->
+        log("get_role() no lock, files not in cache, becoming runner")
+        write_lock_file(my_pid, files)
+        {:ok, :runner}
+    end
+  end
+
+  defp files_covered_by_cache?(files, requested_at) do
+    Enum.all?(files, fn file ->
+      events = TestCache.get_events_for_file(file, requested_at)
+      length(events) > 0
+    end)
+  end
+
+  defp write_lock_file(pid, files) do
     lock_data =
       Jason.encode!(%{
         pid: pid,
+        files: files,
         started_at: DateTime.utc_now() |> DateTime.to_iso8601()
       })
 

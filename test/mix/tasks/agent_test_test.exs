@@ -288,6 +288,185 @@ defmodule Mix.Tasks.AgentTestTest do
       assert exit3 == 0,
              "Third run (single file) failed with exit code #{exit3}:\n#{output3}"
     end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "all same file: three tasks request file A → 1 run, 2 replays" do
+      # Scenario: All three tasks request the same file
+      # Expected: Only one test run, other two replay from cache
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:file_a, file_a},
+        {:file_a_2, file_a},
+        {:file_a_3, file_a}
+      ], debug_log)
+
+      # All should succeed
+      for {{name, _file}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_a_2, file_a}, {:file_a_3, file_a}], results) do
+        assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
+      end
+
+      # Count test runs vs replays
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+      waiter_count = count_log_matches(log_content, "run_or_wait() waiter, skipping test run")
+
+      assert runner_count == 1, "Expected 1 runner, got #{runner_count}. Log:\n#{log_content}"
+      assert waiter_count == 2, "Expected 2 waiters, got #{waiter_count}. Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "no overlap: tasks request A, B, A → 2 runs (A and B), 1 replay" do
+      # Scenario: Task 1 requests A, Task 2 requests B, Task 3 requests A
+      # Expected: Task 1 runs A, Task 2 runs B (no overlap), Task 3 replays A
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+      file_b = "test/test_phoenix_project/blog_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:file_a, file_a},
+        {:file_b, file_b},
+        {:file_a_again, file_a}
+      ], debug_log)
+
+      # All should succeed
+      for {{name, _}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_b, file_b}, {:file_a_again, file_a}], results) do
+        assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
+      end
+
+      # Should have 2 test runs (A and B) and 1 replay (second A)
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+      waiter_count = count_log_matches(log_content, "run_or_wait() waiter, skipping test run")
+
+      assert runner_count == 2, "Expected 2 runners, got #{runner_count}. Log:\n#{log_content}"
+      assert waiter_count == 1, "Expected 1 waiter, got #{waiter_count}. Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "waiter wants superset: tasks request A, then all → 2 runs" do
+      # Scenario: Task 1 requests file A, Task 2 requests all files
+      # Expected: Both should run tests (Task 2 can't reuse partial results)
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:file_a, file_a},
+        {:all_files, nil}  # nil means all files
+      ], debug_log)
+
+      [{output1, exit1}, {output2, exit2}] = results
+
+      assert exit1 == 0, "file_a failed with exit code #{exit1}:\n#{output1}"
+      assert exit2 == 0, "all_files failed with exit code #{exit2}:\n#{output2}"
+
+      # Both should run tests - Task 2 can't reuse Task 1's partial results
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+
+      assert runner_count == 2, "Expected 2 runners, got #{runner_count}. Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 120_000
+    test "runner does all, waiter wants subset: all then A → 1 run, 1 replay" do
+      # Scenario: Task 1 requests all files, Task 2 requests file A
+      # Expected: Task 1 runs all, Task 2 replays (subset of cached results)
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:all_files, nil},
+        {:file_a, file_a}
+      ], debug_log)
+
+      [{output1, exit1}, {output2, exit2}] = results
+
+      assert exit1 == 0, "all_files failed with exit code #{exit1}:\n#{output1}"
+      assert exit2 == 0, "file_a failed with exit code #{exit2}:\n#{output2}"
+
+      # Task 1 runs all, Task 2 should replay (its file A is covered by "all")
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+      waiter_count = count_log_matches(log_content, "run_or_wait() waiter, skipping test run")
+
+      assert runner_count == 1, "Expected 1 runner, got #{runner_count}. Log:\n#{log_content}"
+      assert waiter_count == 1, "Expected 1 waiter, got #{waiter_count}. Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "partial overlap: tasks request A+B, then B+C → 2 runs" do
+      # Scenario: Task 1 requests files A and B, Task 2 requests files B and C
+      # Expected: Both should run tests (Task 2 needs C which wasn't in Task 1)
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+      file_b = "test/test_phoenix_project/blog_test.exs"
+      file_c = "test/test_phoenix_project/accounts_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:files_ab, [file_a, file_b]},
+        {:files_bc, [file_b, file_c]}
+      ], debug_log)
+
+      [{output1, exit1}, {output2, exit2}] = results
+
+      assert exit1 == 0, "files_ab failed with exit code #{exit1}:\n#{output1}"
+      assert exit2 == 0, "files_bc failed with exit code #{exit2}:\n#{output2}"
+
+      # Both should run - Task 2 needs file C which wasn't covered by Task 1
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+
+      assert runner_count == 2, "Expected 2 runners, got #{runner_count}. Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "stale lock recovery: lock file exists but process is dead" do
+      # Scenario: A lock file exists from a crashed process
+      # Expected: New task should detect stale lock and become runner
+
+      debug_log = Path.join(@fixture_project_path, "agent_test_debug.log")
+      cleanup_fixture_files(debug_log)
+
+      # Create a stale lock file with a non-existent PID
+      lock_file = Path.join(@fixture_project_path, "agent_test.lock.json")
+      stale_lock = Jason.encode!(%{
+        "pid" => "999999",
+        "files" => [],
+        "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+      File.write!(lock_file, stale_lock)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+
+      {results, log_content} = run_concurrent_tasks([
+        {:file_a, file_a}
+      ], debug_log)
+
+      [{output, exit_code}] = results
+
+      assert exit_code == 0, "Task failed with exit code #{exit_code}:\n#{output}"
+
+      # Should have detected stale lock and become runner
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+      assert runner_count == 1, "Expected 1 runner (stale lock should be ignored). Log:\n#{log_content}"
+    end
   end
 
   describe "locking behavior" do
@@ -330,5 +509,79 @@ defmodule Mix.Tasks.AgentTestTest do
   defp process_alive?(pid) do
     {_, exit_code} = System.cmd("kill", ["-0", pid], stderr_to_stdout: true)
     exit_code == 0
+  end
+
+  defp cleanup_fixture_files(debug_log) do
+    File.rm(debug_log)
+    File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
+    File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
+    File.rm_rf(Path.join(@fixture_project_path, "agent_test_callers"))
+    File.rm(@shared_events_file)
+
+    # Pre-compile to avoid Mix build lock contention
+    {_, 0} = System.cmd("mix", ["compile"],
+      cd: @fixture_project_path,
+      env: [{"MIX_ENV", "test"}],
+      stderr_to_stdout: true
+    )
+  end
+
+  defp run_concurrent_tasks(tasks, debug_log) do
+    # Build async tasks with staggered starts
+    async_tasks =
+      tasks
+      |> Enum.with_index()
+      |> Enum.map(fn {{name, files}, index} ->
+        # Stagger starts slightly
+        if index > 0, do: Process.sleep(100)
+
+        Task.async(fn ->
+          args = case files do
+            nil -> []  # all files
+            list when is_list(list) -> list
+            file -> [file]
+          end
+
+          Logger.info("#{name} starting with args: #{inspect(args)}")
+
+          {output, exit_code} =
+            System.cmd(
+              "mix",
+              ["agent_test" | args],
+              cd: @fixture_project_path,
+              env: [
+                {"MIX_ENV", "test"},
+                {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
+                {"LOG_LEVEL", "info"}
+              ],
+              stderr_to_stdout: true
+            )
+
+          Logger.info("#{name} completed with exit code #{exit_code}")
+          IO.puts("=== #{name} output ===\n#{output}\n=== End #{name} ===")
+          {output, exit_code}
+        end)
+      end)
+
+    # Wait for all tasks
+    results = Task.await_many(async_tasks, 150_000)
+
+    # Read debug log
+    log_content = if File.exists?(debug_log) do
+      content = File.read!(debug_log)
+      IO.puts("\n=== DEBUG LOG ===\n#{content}\n=== END DEBUG LOG ===")
+      content
+    else
+      IO.puts("\n=== DEBUG LOG NOT FOUND ===")
+      ""
+    end
+
+    {results, log_content}
+  end
+
+  defp count_log_matches(log_content, pattern) do
+    log_content
+    |> String.split("\n")
+    |> Enum.count(&String.contains?(&1, pattern))
   end
 end
