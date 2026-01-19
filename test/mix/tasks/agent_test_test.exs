@@ -5,11 +5,15 @@ defmodule Mix.Tasks.AgentTestTest do
 
   alias ClientUtils.TestFormatter.TestCache
 
-  @lock_file "agent_test.lock.json"
+  @base_dir ".code_my_spec/internal"
+  @lock_file Path.join(@base_dir, "agent_test.lock.json")
   @fixture_project_path "fixtures/test_phoenix_project"
   @shared_events_file Path.expand("fixtures/shared_test_events.json")
 
   setup do
+    # Ensure base directory exists
+    File.mkdir_p!(@base_dir)
+
     # Clean up lock file before each test
     File.rm(@lock_file)
 
@@ -174,11 +178,8 @@ defmodule Mix.Tasks.AgentTestTest do
       #
       # All three should complete without failure
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
-      File.rm(debug_log)
-
-      # Also clean up any stale files in the fixture project
-      File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
+      # Clean up any stale files in the fixture project
+      File.rm_rf(Path.join(@fixture_project_path, ".code_my_spec"))
       File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
 
       # Pre-compile to avoid Mix build lock contention between concurrent processes
@@ -284,7 +285,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: All three tasks request the same file
       # Expected: Only one test run, other two replay from cache
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -314,7 +315,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests A, Task 2 requests B, Task 3 requests A
       # Expected: Task 1 runs A, Task 2 runs B (no overlap), Task 3 replays A
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -345,7 +346,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests file A, Task 2 requests all files
       # Expected: Both should run tests (Task 2 can't reuse partial results)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -372,7 +373,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests all files, Task 2 requests file A
       # Expected: Task 1 runs all, Task 2 replays (subset of cached results)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -401,7 +402,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests files A and B, Task 2 requests files B and C
       # Expected: Both should run tests (Task 2 needs C which wasn't in Task 1)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -430,11 +431,12 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: A lock file exists from a crashed process
       # Expected: New task should detect stale lock and become runner
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/agent_test.log")
+      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
       cleanup_fixture_files(debug_log)
 
       # Create a stale lock file with a non-existent PID
-      lock_file = Path.join(@fixture_project_path, "agent_test.lock.json")
+      lock_file = Path.join([@fixture_project_path, @base_dir, "agent_test.lock.json"])
+      File.mkdir_p!(Path.dirname(lock_file))
       stale_lock = Jason.encode!(%{
         "pid" => "999999",
         "files" => [],
@@ -501,6 +503,9 @@ defmodule Mix.Tasks.AgentTestTest do
   end
 
   defp cleanup_fixture_files(_debug_log) do
+    # Clean up the entire base directory (contains lock file, callers, logs)
+    File.rm_rf(Path.join(@fixture_project_path, @base_dir))
+    # Also clean up legacy paths in case they exist
     File.rm_rf(Path.join(@fixture_project_path, ".code_my_spec"))
     File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
     File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))

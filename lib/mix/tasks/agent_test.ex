@@ -23,22 +23,24 @@ defmodule Mix.Tasks.AgentTest do
   alias ClientUtils.TestFormatter.TestCache
 
   @shortdoc "Runs tests with queuing support for concurrent requests"
-  @lock_file "agent_test.lock.json"
-  @callers_dir "agent_test_callers"
-  @log_dir ".code_my_spec"
-  @log_file ".code_my_spec/agent_test.log"
+  @default_base_dir ".code_my_spec/internal"
+
+  defp base_dir, do: Application.get_env(:client_utils, :agent_test_dir, @default_base_dir)
+  defp lock_file, do: Path.join(base_dir(), "agent_test.lock.json")
+  defp callers_dir, do: Path.join(base_dir(), "callers")
+  defp log_file, do: Path.join(base_dir(), "agent_test.log")
 
   def run(argv) do
     setup_logger()
     Logger.debug("run() called with argv=#{inspect(argv)}")
     requested_at = DateTime.utc_now()
-    files = extract_files(argv)
+    {files, opts} = extract_files_and_opts(argv)
     my_pid = System.pid()
 
     with :ok <- create_caller_file(my_pid, files, requested_at),
          :ok <- wait_current_run(),
          {:ok, role} <- get_role(my_pid, files, requested_at),
-         :ok <- run_or_wait(role, files),
+         :ok <- run_or_wait(role, files, opts),
          :ok <- maybe_replay_results(role, files, requested_at) do
       delete_caller_file(my_pid)
       Logger.debug("run() complete")
@@ -47,11 +49,11 @@ defmodule Mix.Tasks.AgentTest do
   end
 
   defp setup_logger do
-    File.mkdir_p!(@log_dir)
+    File.mkdir_p!(base_dir())
     Logger.add_backend({LoggerFileBackend, :file_log})
 
     Logger.configure_backend({LoggerFileBackend, :file_log},
-      path: @log_file,
+      path: log_file(),
       level: :debug,
       format: "$time $metadata[$level] $message\n",
       metadata: [:pid, :mfa]
@@ -61,7 +63,7 @@ defmodule Mix.Tasks.AgentTest do
   # Step 1: Register ourselves as a caller
   defp create_caller_file(pid, files, requested_at) do
     Logger.debug("create_caller_file() pid=#{pid} files=#{inspect(files)}")
-    File.mkdir_p!(@callers_dir)
+    File.mkdir_p!(callers_dir())
 
     caller_data =
       Jason.encode!(%{
@@ -88,7 +90,7 @@ defmodule Mix.Tasks.AgentTest do
   end
 
   defp get_locker_pid do
-    case File.read(@lock_file) do
+    case File.read(lock_file()) do
       {:error, :enoent} ->
         nil
 
@@ -113,7 +115,7 @@ defmodule Mix.Tasks.AgentTest do
   # Step 3: Acquire lock - we're either runner or waiter
   # Key insight: if cache already has events for our files, become waiter
   defp get_role(my_pid, files, requested_at) do
-    case File.read(@lock_file) do
+    case File.read(lock_file()) do
       {:error, :enoent} ->
         # No lock - check if cache already has our results
         maybe_become_runner_or_waiter(my_pid, files, requested_at)
@@ -164,9 +166,14 @@ defmodule Mix.Tasks.AgentTest do
     end
   end
 
-  defp files_covered_by_cache?(files, requested_at) do
+  # Cache is valid if files were tested within the last 60 seconds
+  @cache_validity_seconds 60
+
+  defp files_covered_by_cache?(files, _requested_at) do
+    cache_cutoff = DateTime.add(DateTime.utc_now(), -@cache_validity_seconds, :second)
+
     Enum.all?(files, fn file ->
-      events = TestCache.get_events_for_file(file, requested_at)
+      events = TestCache.get_events_for_file(file, cache_cutoff)
       length(events) > 0
     end)
   end
@@ -179,27 +186,28 @@ defmodule Mix.Tasks.AgentTest do
         started_at: DateTime.utc_now() |> DateTime.to_iso8601()
       })
 
-    File.write!(@lock_file, lock_data)
+    File.write!(lock_file(), lock_data)
   end
 
   # Step 4: Run tests if we're the runner
-  defp run_or_wait(:runner, files) do
+  defp run_or_wait(:runner, files, opts) do
     Logger.debug("run_or_wait() runner, running tests with files=#{inspect(files)}")
 
     try do
-      test_argv = ["--formatter", "ClientUtils.TestFormatter" | files]
+      # Pass through all original options, adding our formatter
+      test_argv = opts ++ ["--formatter", "ClientUtils.TestFormatter"] ++ files
       Logger.debug("run_or_wait() calling Mix.Tasks.Test.run with #{inspect(test_argv)}")
       # Call the test task directly to bypass any aliases
       Mix.Tasks.Test.run(test_argv)
       Logger.debug("run_or_wait() tests complete")
       :ok
     after
-      File.rm(@lock_file)
+      File.rm(lock_file())
       Logger.debug("run_or_wait() lock released")
     end
   end
 
-  defp run_or_wait(:waiter, _files) do
+  defp run_or_wait(:waiter, _files, _opts) do
     Logger.debug("run_or_wait() waiter, skipping test run")
     :ok
   end
@@ -211,12 +219,14 @@ defmodule Mix.Tasks.AgentTest do
     :ok
   end
 
-  defp maybe_replay_results(:waiter, files, requested_at) do
+  defp maybe_replay_results(:waiter, files, _requested_at) do
+    cache_cutoff = DateTime.add(DateTime.utc_now(), -@cache_validity_seconds, :second)
+
     events =
       if files == [] do
-        TestCache.get_events_after(requested_at)
+        TestCache.get_events_after(cache_cutoff)
       else
-        Enum.flat_map(files, &TestCache.get_events_for_file(&1, requested_at))
+        Enum.flat_map(files, &TestCache.get_events_for_file(&1, cache_cutoff))
       end
 
     Logger.debug("maybe_replay_results() waiter, found #{length(events)} events")
@@ -252,7 +262,7 @@ defmodule Mix.Tasks.AgentTest do
   end
 
   # Caller file management
-  defp caller_file_path(pid), do: Path.join(@callers_dir, "#{pid}.json")
+  defp caller_file_path(pid), do: Path.join(callers_dir(), "#{pid}.json")
   defp delete_caller_file(pid), do: File.rm(caller_file_path(pid))
 
   # Utilities
@@ -261,9 +271,12 @@ defmodule Mix.Tasks.AgentTest do
     exit_code == 0
   end
 
-  defp extract_files(argv) do
-    argv
-    |> Enum.filter(&(String.ends_with?(&1, ".exs") or String.ends_with?(&1, ".ex")))
-    |> Enum.map(&Path.expand/1)
+  defp extract_files_and_opts(argv) do
+    {files, opts} =
+      Enum.split_with(argv, fn arg ->
+        String.ends_with?(arg, ".exs") or String.ends_with?(arg, ".ex")
+      end)
+
+    {Enum.map(files, &Path.expand/1), opts}
   end
 end
