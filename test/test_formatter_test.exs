@@ -152,7 +152,7 @@ defmodule ClientUtils.TestFormatterTest do
         case: TestModule,
         name: :"should test",
         state: nil,
-        tags: %{file: "/test/file.exs"}
+        tags: %{file: "/test/file.exs", test_type: :test}
       }
 
       event = {:test_finished, test}
@@ -163,7 +163,7 @@ defmodule ClientUtils.TestFormatterTest do
     end
 
     test "increments pass_counter for passing tests", %{config: config} do
-      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil}
+      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil, tags: %{test_type: :test}}
       event = {:test_finished, test}
 
       {:noreply, new_config} = ClientUtils.TestFormatter.handle_cast(event, config)
@@ -178,7 +178,7 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
-        tags: %{file: __ENV__.file, line: 1},
+        tags: %{file: __ENV__.file, line: 1, test_type: :test},
         state: {:failed, failures}
       }
 
@@ -193,7 +193,8 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
-        state: {:skip, "skipped"}
+        state: {:skip, "skipped"},
+        tags: %{test_type: :test}
       }
 
       event = {:test_finished, test}
@@ -207,7 +208,8 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
-        state: {:excluded, "excluded"}
+        state: {:excluded, "excluded"},
+        tags: %{test_type: :test}
       }
 
       event = {:test_finished, test}
@@ -221,7 +223,8 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
-        state: {:invalid, :some_reason}
+        state: {:invalid, :some_reason},
+        tags: %{test_type: :test}
       }
 
       event = {:test_finished, test}
@@ -238,7 +241,7 @@ defmodule ClientUtils.TestFormatterTest do
       {:ok, config} = ClientUtils.TestFormatter.init(output_file: output_file)
 
       # Add a passing test
-      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil}
+      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil, tags: %{test_type: :test}}
       {:noreply, config} = ClientUtils.TestFormatter.handle_cast({:test_finished, test}, config)
 
       # Set start time
@@ -284,7 +287,7 @@ defmodule ClientUtils.TestFormatterTest do
         case: TestModule,
         name: :"should test",
         state: nil,
-        tags: %{file: file}
+        tags: %{file: file, test_type: :test}
       }
 
       {:noreply, config} =

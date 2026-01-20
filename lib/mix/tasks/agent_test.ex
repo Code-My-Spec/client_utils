@@ -25,7 +25,10 @@ defmodule Mix.Tasks.AgentTest do
   @shortdoc "Runs tests with queuing support for concurrent requests"
   @default_base_dir ".code_my_spec/internal"
 
-  defp base_dir, do: Application.get_env(:client_utils, :agent_test_dir, @default_base_dir)
+  defp base_dir do
+    System.get_env("AGENT_TEST_DIR") ||
+      Application.get_env(:client_utils, :agent_test_dir, @default_base_dir)
+  end
   defp lock_file, do: Path.join(base_dir(), "agent_test.lock.json")
   defp callers_dir, do: Path.join(base_dir(), "callers")
   defp log_file, do: Path.join(base_dir(), "agent_test.log")

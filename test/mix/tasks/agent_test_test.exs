@@ -29,23 +29,40 @@ defmodule Mix.Tasks.AgentTestTest do
     :ok
   end
 
-  describe "extract_files/1" do
+  describe "extract_files_and_opts/1" do
     test "extracts .exs files from argv" do
       argv = ["test/foo_test.exs", "--only", "integration", "test/bar_test.exs"]
-      files = extract_files(argv)
+      {files, opts} = extract_files_and_opts(argv)
       assert files == ["test/foo_test.exs", "test/bar_test.exs"]
+      assert opts == ["--only", "integration"]
     end
 
     test "extracts .ex files from argv" do
       argv = ["lib/foo.ex", "--trace"]
-      files = extract_files(argv)
+      {files, opts} = extract_files_and_opts(argv)
       assert files == ["lib/foo.ex"]
+      assert opts == ["--trace"]
     end
 
     test "returns empty list when no files" do
       argv = ["--only", "integration", "--trace"]
-      files = extract_files(argv)
+      {files, opts} = extract_files_and_opts(argv)
       assert files == []
+      assert opts == ["--only", "integration", "--trace"]
+    end
+
+    test "extracts --slowest flag with value" do
+      argv = ["test/foo_test.exs", "--slowest", "5"]
+      {files, opts} = extract_files_and_opts(argv)
+      assert files == ["test/foo_test.exs"]
+      assert opts == ["--slowest", "5"]
+    end
+
+    test "extracts multiple flags including --slowest and --trace" do
+      argv = ["--trace", "test/foo_test.exs", "--slowest", "3", "--seed", "12345"]
+      {files, opts} = extract_files_and_opts(argv)
+      assert files == ["test/foo_test.exs"]
+      assert opts == ["--trace", "--slowest", "3", "--seed", "12345"]
     end
   end
 
@@ -178,17 +195,8 @@ defmodule Mix.Tasks.AgentTestTest do
       #
       # All three should complete without failure
 
-      # Clean up any stale files in the fixture project
-      File.rm_rf(Path.join(@fixture_project_path, ".code_my_spec"))
-      File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
-
-      # Pre-compile to avoid Mix build lock contention between concurrent processes
-      {_, 0} =
-        System.cmd("mix", ["compile"],
-          cd: @fixture_project_path,
-          env: [{"MIX_ENV", "test"}],
-          stderr_to_stdout: true
-        )
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
 
       single_file = "test/test_phoenix_project/blog/post_repository_test.exs"
 
@@ -204,6 +212,7 @@ defmodule Mix.Tasks.AgentTestTest do
               cd: @fixture_project_path,
               env: [
                 {"MIX_ENV", "test"},
+                {"AGENT_TEST_DIR", test_dir},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
                 {"LOG_LEVEL", "warning"}
               ],
@@ -228,6 +237,7 @@ defmodule Mix.Tasks.AgentTestTest do
               cd: @fixture_project_path,
               env: [
                 {"MIX_ENV", "test"},
+                {"AGENT_TEST_DIR", test_dir},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
                 {"LOG_LEVEL", "warning"}
               ],
@@ -251,6 +261,7 @@ defmodule Mix.Tasks.AgentTestTest do
               cd: @fixture_project_path,
               env: [
                 {"MIX_ENV", "test"},
+                {"AGENT_TEST_DIR", test_dir},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
                 {"LOG_LEVEL", "warning"}
               ],
@@ -285,16 +296,14 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: All three tasks request the same file
       # Expected: Only one test run, other two replay from cache
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
-
+      test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
       {results, log_content} = run_concurrent_tasks([
         {:file_a, file_a},
         {:file_a_2, file_a},
         {:file_a_3, file_a}
-      ], debug_log)
+      ], test_dir)
 
       # All should succeed
       for {{name, _file}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_a_2, file_a}, {:file_a_3, file_a}], results) do
@@ -315,9 +324,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests A, Task 2 requests B, Task 3 requests A
       # Expected: Task 1 runs A, Task 2 runs B (no overlap), Task 3 replays A
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
-
+      test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
       file_b = "test/test_phoenix_project/blog_test.exs"
 
@@ -325,7 +332,7 @@ defmodule Mix.Tasks.AgentTestTest do
         {:file_a, file_a},
         {:file_b, file_b},
         {:file_a_again, file_a}
-      ], debug_log)
+      ], test_dir)
 
       # All should succeed
       for {{name, _}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_b, file_b}, {:file_a_again, file_a}], results) do
@@ -346,15 +353,13 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests file A, Task 2 requests all files
       # Expected: Both should run tests (Task 2 can't reuse partial results)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
-
+      test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
       {results, log_content} = run_concurrent_tasks([
         {:file_a, file_a},
         {:all_files, nil}  # nil means all files
-      ], debug_log)
+      ], test_dir)
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -373,15 +378,13 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests all files, Task 2 requests file A
       # Expected: Task 1 runs all, Task 2 replays (subset of cached results)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
-
+      test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
       {results, log_content} = run_concurrent_tasks([
         {:all_files, nil},
         {:file_a, file_a}
-      ], debug_log)
+      ], test_dir)
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -402,9 +405,7 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: Task 1 requests files A and B, Task 2 requests files B and C
       # Expected: Both should run tests (Task 2 needs C which wasn't in Task 1)
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
-
+      test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
       file_b = "test/test_phoenix_project/blog_test.exs"
       file_c = "test/test_phoenix_project/accounts_test.exs"
@@ -412,7 +413,7 @@ defmodule Mix.Tasks.AgentTestTest do
       {results, log_content} = run_concurrent_tasks([
         {:files_ab, [file_a, file_b]},
         {:files_bc, [file_b, file_c]}
-      ], debug_log)
+      ], test_dir)
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -431,12 +432,11 @@ defmodule Mix.Tasks.AgentTestTest do
       # Scenario: A lock file exists from a crashed process
       # Expected: New task should detect stale lock and become runner
 
-      debug_log = Path.join(@fixture_project_path, ".code_my_spec/internal/agent_test.log")
-      cleanup_fixture_files(debug_log)
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
 
       # Create a stale lock file with a non-existent PID
-      lock_file = Path.join([@fixture_project_path, @base_dir, "agent_test.lock.json"])
-      File.mkdir_p!(Path.dirname(lock_file))
+      lock_file = Path.join(test_dir, "agent_test.lock.json")
       stale_lock = Jason.encode!(%{
         "pid" => "999999",
         "files" => [],
@@ -446,17 +446,84 @@ defmodule Mix.Tasks.AgentTestTest do
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:file_a, file_a}
-      ], debug_log)
-
-      [{output, exit_code}] = results
+      # Run directly instead of using run_concurrent_tasks (which clears the dir)
+      {output, exit_code} =
+        System.cmd(
+          "mix",
+          ["agent_test", file_a],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
+            {"LOG_LEVEL", "warning"}
+          ],
+          stderr_to_stdout: true
+        )
 
       assert exit_code == 0, "Task failed with exit code #{exit_code}:\n#{output}"
+
+      # Read the log
+      debug_log = Path.join(test_dir, "agent_test.log")
+      log_content = if File.exists?(debug_log), do: File.read!(debug_log), else: ""
 
       # Should have detected stale lock and become runner
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
       assert runner_count == 1, "Expected 1 runner (stale lock should be ignored). Log:\n#{log_content}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "--slowest flag is passed through to mix test" do
+      # Verify that CLI options like --slowest are properly passed through
+
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
+
+      # Run mix agent_test with --slowest flag
+      {output, exit_code} =
+        System.cmd(
+          "mix",
+          ["agent_test", "--slowest", "2", "test/test_phoenix_project/blog/post_cache_test.exs"],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code == 0, "agent_test failed:\n#{output}"
+      # ExUnit outputs "Top N slowest" when --slowest is used
+      assert String.contains?(output, "slowest"), "Expected --slowest output in:\n#{output}"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "--trace flag is passed through to mix test" do
+      # Verify that CLI options like --trace are properly passed through
+
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
+
+      # Run mix agent_test with --trace flag
+      {output, exit_code} =
+        System.cmd(
+          "mix",
+          ["agent_test", "--trace", "test/test_phoenix_project/blog/post_cache_test.exs"],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code == 0, "agent_test failed:\n#{output}"
+      # --trace outputs each test name with timing, look for characteristic pattern
+      assert String.contains?(output, "test "), "Expected --trace output in:\n#{output}"
     end
   end
 
@@ -478,10 +545,13 @@ defmodule Mix.Tasks.AgentTestTest do
 
   # Helper functions that mirror the private functions in the module
 
-  defp extract_files(argv) do
-    Enum.filter(argv, fn arg ->
-      String.ends_with?(arg, ".exs") or String.ends_with?(arg, ".ex")
-    end)
+  defp extract_files_and_opts(argv) do
+    {files, opts} =
+      Enum.split_with(argv, fn arg ->
+        String.ends_with?(arg, ".exs") or String.ends_with?(arg, ".ex")
+      end)
+
+    {files, opts}
   end
 
   defp locked? do
@@ -502,32 +572,19 @@ defmodule Mix.Tasks.AgentTestTest do
     exit_code == 0
   end
 
-  defp cleanup_fixture_files(_debug_log) do
-    # Clean up the entire base directory (contains lock file, callers, logs)
-    File.rm_rf(Path.join(@fixture_project_path, @base_dir))
-    # Also clean up legacy paths in case they exist
-    File.rm_rf(Path.join(@fixture_project_path, ".code_my_spec"))
-    File.rm(Path.join(@fixture_project_path, "agent_test.lock.json"))
-    File.rm(Path.join(@fixture_project_path, "agent_test_events.json"))
-    File.rm_rf(Path.join(@fixture_project_path, "agent_test_callers"))
-    File.rm(@shared_events_file)
+  defp run_concurrent_tasks(tasks, test_dir) do
+    # Ensure test directory exists and is clean
+    File.rm_rf!(test_dir)
+    File.mkdir_p!(test_dir)
+    debug_log = Path.join(test_dir, "agent_test.log")
 
-    # Pre-compile to avoid Mix build lock contention
-    {_, 0} = System.cmd("mix", ["compile"],
-      cd: @fixture_project_path,
-      env: [{"MIX_ENV", "test"}],
-      stderr_to_stdout: true
-    )
-  end
-
-  defp run_concurrent_tasks(tasks, debug_log) do
     # Build async tasks with staggered starts
     async_tasks =
       tasks
       |> Enum.with_index()
       |> Enum.map(fn {{name, files}, index} ->
-        # Stagger starts slightly
-        if index > 0, do: Process.sleep(100)
+        # Stagger starts to ensure order with System.cmd process spawning
+        if index > 0, do: Process.sleep(500)
 
         Task.async(fn ->
           args = case files do
@@ -545,6 +602,7 @@ defmodule Mix.Tasks.AgentTestTest do
               cd: @fixture_project_path,
               env: [
                 {"MIX_ENV", "test"},
+                {"AGENT_TEST_DIR", test_dir},
                 {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
                 {"LOG_LEVEL", "warning"}
               ],
@@ -567,6 +625,10 @@ defmodule Mix.Tasks.AgentTestTest do
     end
 
     {results, log_content}
+  end
+
+  defp unique_test_dir do
+    Path.expand(Path.join(@fixture_project_path, ".code_my_spec/test_#{:rand.uniform(1_000_000)}"))
   end
 
   defp count_log_matches(log_content, pattern) do
