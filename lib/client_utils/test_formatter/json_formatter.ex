@@ -281,47 +281,7 @@ defmodule ClientUtils.TestFormatter.JsonFormatter do
 
   defp format_sides(struct, inspect) do
     %{left: left, right: right} = struct
-
-    case format_diff(left, right) do
-      {left, right} ->
-        {IO.iodata_to_binary(left), IO.iodata_to_binary(right)}
-
-      nil ->
-        {if_value(left, inspect), if_value(right, inspect)}
-    end
-  end
-
-  defp format_diff(left, right) do
-    if has_value?(left) and has_value?(right) do
-      if script = edit_script(left, right) do
-        colorize_diff(script, {[], []})
-      end
-    end
-  end
-
-  defp colorize_diff(script, acc) when is_list(script) do
-    Enum.reduce(script, acc, &colorize_diff(&1, &2))
-  end
-
-  defp colorize_diff({:eq, content}, {left, right}) do
-    {[left | content], [right | content]}
-  end
-
-  defp colorize_diff({:del, content}, {left, right}) do
-    {[left | content], right}
-  end
-
-  defp colorize_diff({:ins, content}, {left, right}) do
-    {left, [right | content]}
-  end
-
-  defp edit_script(left, right) do
-    task = Task.async(ExUnit.Diff, :script, [left, right])
-
-    case Task.yield(task, 1_500) || Task.shutdown(task, :brutal_kill) do
-      {:ok, script} -> script
-      nil -> nil
-    end
+    {if_value(left, inspect), if_value(right, inspect)}
   end
 
   defp format_stacktrace([], _case, _test, _color) do

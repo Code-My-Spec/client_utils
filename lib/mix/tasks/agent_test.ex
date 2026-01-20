@@ -35,6 +35,7 @@ defmodule Mix.Tasks.AgentTest do
 
   def run(argv) do
     setup_logging()
+    cleanup_stale_callers()
     requested_at = DateTime.utc_now()
     {files, opts} = extract_files_and_opts(argv)
     my_pid = System.pid()
@@ -269,6 +270,21 @@ defmodule Mix.Tasks.AgentTest do
   # Caller file management
   defp caller_file_path(pid), do: Path.join(callers_dir(), "#{pid}.json")
   defp delete_caller_file(pid), do: File.rm(caller_file_path(pid))
+
+  defp cleanup_stale_callers do
+    case File.ls(callers_dir()) do
+      {:ok, files} ->
+        Enum.each(files, fn file ->
+          pid = file |> Path.basename(".json")
+          unless process_alive?(pid) do
+            debug_log("cleanup_stale_callers() removing stale caller file for pid=#{pid}")
+            File.rm(Path.join(callers_dir(), file))
+          end
+        end)
+      {:error, :enoent} ->
+        :ok
+    end
+  end
 
   # Utilities
   defp process_alive?(pid) do
