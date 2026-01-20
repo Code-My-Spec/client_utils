@@ -213,8 +213,8 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_DIR", test_dir},
-                {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "warning"}
+                {"AGENT_TEST_DEBUG", "true"},
+                {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
               ],
               stderr_to_stdout: true
             )
@@ -238,8 +238,8 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_DIR", test_dir},
-                {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "warning"}
+                {"AGENT_TEST_DEBUG", "true"},
+                {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
               ],
               stderr_to_stdout: true
             )
@@ -262,8 +262,8 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_DIR", test_dir},
-                {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "warning"}
+                {"AGENT_TEST_DEBUG", "true"},
+                {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
               ],
               stderr_to_stdout: true
             )
@@ -455,8 +455,8 @@ defmodule Mix.Tasks.AgentTestTest do
           env: [
             {"MIX_ENV", "test"},
             {"AGENT_TEST_DIR", test_dir},
-            {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-            {"LOG_LEVEL", "warning"}
+            {"AGENT_TEST_DEBUG", "true"},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
           ],
           stderr_to_stdout: true
         )
@@ -496,7 +496,7 @@ defmodule Mix.Tasks.AgentTestTest do
 
       assert exit_code == 0, "agent_test failed:\n#{output}"
       # ExUnit outputs "Top N slowest" when --slowest is used
-      assert String.contains?(output, "slowest"), "Expected --slowest output in:\n#{output}"
+      assert output =~ ~r/Top \d+ slowest/, "Expected 'Top N slowest' output in:\n#{output}"
     end
 
     @tag :integration
@@ -603,8 +603,8 @@ defmodule Mix.Tasks.AgentTestTest do
               env: [
                 {"MIX_ENV", "test"},
                 {"AGENT_TEST_DIR", test_dir},
-                {"AGENT_TEST_EVENTS_FILE", @shared_events_file},
-                {"LOG_LEVEL", "warning"}
+                {"AGENT_TEST_DEBUG", "true"},
+                {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
               ],
               stderr_to_stdout: true
             )

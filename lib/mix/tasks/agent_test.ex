@@ -34,8 +34,7 @@ defmodule Mix.Tasks.AgentTest do
   defp log_file, do: Path.join(base_dir(), "agent_test.log")
 
   def run(argv) do
-    setup_logger()
-    Logger.debug("run() called with argv=#{inspect(argv)}")
+    setup_logging()
     requested_at = DateTime.utc_now()
     {files, opts} = extract_files_and_opts(argv)
     my_pid = System.pid()
@@ -46,26 +45,29 @@ defmodule Mix.Tasks.AgentTest do
          :ok <- run_or_wait(role, files, opts),
          :ok <- maybe_replay_results(role, files, requested_at) do
       delete_caller_file(my_pid)
-      Logger.debug("run() complete")
+      debug_log("run() complete")
       :ok
     end
   end
 
-  defp setup_logger do
-    File.mkdir_p!(base_dir())
-    Logger.add_backend({LoggerFileBackend, :file_log})
+  defp setup_logging do
+    if debug_enabled?() do
+      File.mkdir_p!(base_dir())
+      :logger.set_handler_config(:default, :level, :none)
+      Logger.add_backend({LoggerFileBackend, :file_log})
+      Logger.configure_backend({LoggerFileBackend, :file_log}, path: log_file(), level: :debug)
+    end
+  end
 
-    Logger.configure_backend({LoggerFileBackend, :file_log},
-      path: log_file(),
-      level: :debug,
-      format: "$time $metadata[$level] $message\n",
-      metadata: [:pid, :mfa]
-    )
+  defp debug_enabled?, do: System.get_env("AGENT_TEST_DEBUG") == "true"
+
+  defp debug_log(msg) do
+    if debug_enabled?(), do: Logger.debug(msg)
   end
 
   # Step 1: Register ourselves as a caller
   defp create_caller_file(pid, files, requested_at) do
-    Logger.debug("create_caller_file() pid=#{pid} files=#{inspect(files)}")
+    debug_log("create_caller_file() pid=#{pid} files=#{inspect(files)}")
     File.mkdir_p!(callers_dir())
 
     caller_data =
@@ -83,11 +85,11 @@ defmodule Mix.Tasks.AgentTest do
   defp wait_current_run do
     case get_locker_pid() do
       nil ->
-        Logger.debug("wait_current_run() no current run")
+        debug_log("wait_current_run() no current run")
         :ok
 
       locker_pid ->
-        Logger.debug("wait_current_run() waiting for #{locker_pid}")
+        debug_log("wait_current_run() waiting for #{locker_pid}")
         wait_for_process(locker_pid)
     end
   end
@@ -110,7 +112,7 @@ defmodule Mix.Tasks.AgentTest do
       Process.sleep(100)
       wait_for_process(locker_pid)
     else
-      Logger.debug("wait_for_process() #{locker_pid} finished")
+      debug_log("wait_for_process() #{locker_pid} finished")
       :ok
     end
   end
@@ -127,13 +129,13 @@ defmodule Mix.Tasks.AgentTest do
         case Jason.decode(content) do
           {:ok, %{"pid" => pid}} when pid == my_pid ->
             # We already have the lock (shouldn't happen but handle it)
-            Logger.debug("get_role() already have lock, runner")
+            debug_log("get_role() already have lock, runner")
             {:ok, :runner}
 
           {:ok, %{"pid" => locker_pid}} ->
             if process_alive?(locker_pid) do
               # Someone else got it first - we're a waiter
-              Logger.debug("get_role() lock held by #{locker_pid}, becoming waiter")
+              debug_log("get_role() lock held by #{locker_pid}, becoming waiter")
               {:ok, :waiter}
             else
               # Stale lock - check cache before taking
@@ -152,18 +154,18 @@ defmodule Mix.Tasks.AgentTest do
     cond do
       # Empty files = "all tests" - must run
       files == [] ->
-        Logger.debug("get_role() no lock, all files requested, becoming runner")
+        debug_log("get_role() no lock, all files requested, becoming runner")
         write_lock_file(my_pid, files)
         {:ok, :runner}
 
       # Specific files - check if cache covers them
       files_covered_by_cache?(files, requested_at) ->
-        Logger.debug("get_role() no lock but cache covers our files, becoming waiter")
+        debug_log("get_role() no lock but cache covers our files, becoming waiter")
         {:ok, :waiter}
 
       # Not covered - become runner
       true ->
-        Logger.debug("get_role() no lock, files not in cache, becoming runner")
+        debug_log("get_role() no lock, files not in cache, becoming runner")
         write_lock_file(my_pid, files)
         {:ok, :runner}
     end
@@ -194,31 +196,31 @@ defmodule Mix.Tasks.AgentTest do
 
   # Step 4: Run tests if we're the runner
   defp run_or_wait(:runner, files, opts) do
-    Logger.debug("run_or_wait() runner, running tests with files=#{inspect(files)}")
+    debug_log("run_or_wait() runner, running tests with files=#{inspect(files)}")
 
     try do
       # Pass through all original options, adding our formatter
       test_argv = opts ++ ["--formatter", "ClientUtils.TestFormatter"] ++ files
-      Logger.debug("run_or_wait() calling Mix.Tasks.Test.run with #{inspect(test_argv)}")
+      debug_log("run_or_wait() calling Mix.Tasks.Test.run with #{inspect(test_argv)}")
       # Call the test task directly to bypass any aliases
       Mix.Tasks.Test.run(test_argv)
-      Logger.debug("run_or_wait() tests complete")
+      debug_log("run_or_wait() tests complete")
       :ok
     after
       File.rm(lock_file())
-      Logger.debug("run_or_wait() lock released")
+      debug_log("run_or_wait() lock released")
     end
   end
 
   defp run_or_wait(:waiter, _files, _opts) do
-    Logger.debug("run_or_wait() waiter, skipping test run")
+    debug_log("run_or_wait() waiter, skipping test run")
     :ok
   end
 
   # Step 5: Replay results from the events cache (only for waiters)
   defp maybe_replay_results(:runner, _files, _requested_at) do
     # Runner already saw output from the test run
-    Logger.debug("maybe_replay_results() runner, skipping replay")
+    debug_log("maybe_replay_results() runner, skipping replay")
     :ok
   end
 
@@ -232,7 +234,7 @@ defmodule Mix.Tasks.AgentTest do
         Enum.flat_map(files, &TestCache.get_events_for_file(&1, cache_cutoff))
       end
 
-    Logger.debug("maybe_replay_results() waiter, found #{length(events)} events")
+    debug_log("maybe_replay_results() waiter, found #{length(events)} events")
 
     if events != [] do
       replay_to_cli(events)
@@ -242,7 +244,7 @@ defmodule Mix.Tasks.AgentTest do
   end
 
   defp replay_to_cli(events) do
-    Logger.debug("replay_to_cli() replaying #{length(events)} events")
+    debug_log("replay_to_cli() replaying #{length(events)} events")
 
     cli_opts = [
       colors: [],
