@@ -22,3 +22,6 @@ Mnesia.*
 fixtures/Mnesia.*
 *.dets
 fixtures/*.dets
+
+# Hex package artifacts
+client_utils*.tar

@@ -1,6 +1,8 @@
 defmodule ClientUtils.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/Code-My-Spec/client_utils"
+
   def project do
     [
       app: :client_utils,
@@ -8,6 +10,8 @@ defmodule ClientUtils.MixProject do
       elixir: "~> 1.18",
       description: "ExUnit formatter with JSON output and distributed test coordination",
       package: package(),
+      docs: docs(),
+      source_url: @source_url,
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -28,7 +32,15 @@ defmodule ClientUtils.MixProject do
       files: ["lib", "mix.exs", "README.md", "LICENSE"],
       maintainers: ["John Davenport"],
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/Code-My-Spec/client_utils"}
+      links: %{"GitHub" => @source_url}
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      source_url: @source_url,
+      extras: ["README.md"]
     ]
   end
 
