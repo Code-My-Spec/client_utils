@@ -10,14 +10,22 @@ defmodule ClientUtils.TestFormatter.TestCache do
   all type information (tuples, structs, etc).
   """
 
-  @default_events_file "agent_test_events.json"
+  @default_base_dir ".code_my_spec/internal"
+  @default_events_filename "agent_test_events.json"
 
   @doc """
   Returns the events file path.
-  Can be configured via AGENT_TEST_EVENTS_FILE environment variable.
+  Uses the configured :agent_test_dir, or can be overridden via AGENT_TEST_EVENTS_FILE environment variable.
   """
   def events_file do
-    System.get_env("AGENT_TEST_EVENTS_FILE") || @default_events_file
+    case System.get_env("AGENT_TEST_EVENTS_FILE") do
+      nil ->
+        dir = Application.get_env(:client_utils, :agent_test_dir, @default_base_dir)
+        Path.join(dir, @default_events_filename)
+
+      path ->
+        path
+    end
   end
 
   @doc """
@@ -190,7 +198,11 @@ defmodule ClientUtils.TestFormatter.TestCache do
 
   defp write_events_file(data) do
     file = events_file()
+    dir = Path.dirname(file)
     tmp_file = file <> ".tmp"
+
+    # Ensure directory exists
+    File.mkdir_p!(dir)
 
     # Atomic write: write to temp file, then rename
     File.write!(tmp_file, Jason.encode!(data, pretty: true))

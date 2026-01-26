@@ -247,13 +247,18 @@ defmodule Mix.Tasks.AgentTest do
   defp replay_to_cli(events) do
     debug_log("replay_to_cli() replaying #{length(events)} events")
 
+    # Count test results from events for our summary
+    {pass_count, fail_count} = count_test_results(events)
+    total_tests = pass_count + fail_count
+
     cli_opts = [
       colors: [],
       slowest: 0,
       slowest_modules: 0,
       seed: 0,
       trace: false,
-      width: 80
+      width: 80,
+      max_cases: System.schedulers_online() * 2
     ]
 
     {:ok, cli} = GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
@@ -264,7 +269,45 @@ defmodule Mix.Tasks.AgentTest do
       GenServer.cast(cli, event)
     end
 
-    GenServer.cast(cli, {:suite_finished, %{run: 0, load: 0, async: 0}})
+    GenServer.cast(cli, {:suite_finished, 0, 0})
+
+    # Wait for all cast messages to be processed before continuing
+    try do
+      :sys.get_state(cli, 5000)
+    catch
+      :exit, _ -> :ok
+    end
+
+    # Stop the GenServer cleanly to flush any remaining output
+    try do
+      GenServer.stop(cli, :normal, 5000)
+    catch
+      :exit, _ -> :ok
+    end
+
+    # Print summary to ensure output is complete (CLIFormatter may not print it for replays)
+    IO.puts("\nFinished in 0.0 seconds (0.0s async, 0.0s sync)")
+    test_word = if total_tests == 1, do: "test", else: "tests"
+    fail_word = if fail_count == 1, do: "failure", else: "failures"
+    IO.puts("#{total_tests} #{test_word}, #{fail_count} #{fail_word}")
+
+    debug_log("replay_to_cli() complete")
+  end
+
+  # Count passes and failures from test events
+  defp count_test_results(events) do
+    Enum.reduce(events, {0, 0}, fn event, {passes, fails} ->
+      case event do
+        {:test_finished, %ExUnit.Test{state: nil}} ->
+          {passes + 1, fails}
+
+        {:test_finished, %ExUnit.Test{state: {:failed, _}}} ->
+          {passes, fails + 1}
+
+        _ ->
+          {passes, fails}
+      end
+    end)
   end
 
   # Caller file management

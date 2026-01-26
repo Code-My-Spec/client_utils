@@ -137,6 +137,9 @@ defmodule Mix.Tasks.AgentTestTest do
       # The test should pass (or at least run)
       assert exit_code == 0 or String.contains?(output, "test"), "Test run failed: #{output}"
 
+      # Verify complete test output - all results should be rendered
+      assert_complete_test_output(output, "can run tests in fixture project")
+
       # Verify events were cached
       events = TestCache.get_events_for_file(abs_test_file, before_time)
 
@@ -160,7 +163,7 @@ defmodule Mix.Tasks.AgentTestTest do
       before_time = DateTime.utc_now()
       Process.sleep(10)
 
-      {_output, _exit_code} =
+      {output, _exit_code} =
         System.cmd(
           "mix",
           [
@@ -173,6 +176,9 @@ defmodule Mix.Tasks.AgentTestTest do
           env: [{"MIX_ENV", "test"}, {"AGENT_TEST_EVENTS_FILE", @shared_events_file}],
           stderr_to_stdout: true
         )
+
+      # Verify complete test output - all results should be rendered
+      assert_complete_test_output(output, "second caller waits and replays cached results")
 
       # Verify cache has events
       events = TestCache.get_events_for_file(abs_test_file, before_time)
@@ -288,6 +294,11 @@ defmodule Mix.Tasks.AgentTestTest do
 
       assert exit3 == 0,
              "Third run (single file) failed with exit code #{exit3}:\n#{output3}"
+
+      # Verify complete test output for each run - all results should be rendered
+      assert_complete_test_output(output1, "three concurrent - first run (single file)")
+      assert_complete_test_output(output2, "three concurrent - second run (all tests)")
+      assert_complete_test_output(output3, "three concurrent - third run (single file)")
     end
 
     @tag :integration
@@ -305,9 +316,10 @@ defmodule Mix.Tasks.AgentTestTest do
         {:file_a_3, file_a}
       ], test_dir)
 
-      # All should succeed
+      # All should succeed and have complete output
       for {{name, _file}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_a_2, file_a}, {:file_a_3, file_a}], results) do
         assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
+        assert_complete_test_output(output, "all same file - #{name}")
       end
 
       # Count test runs vs replays
@@ -334,9 +346,10 @@ defmodule Mix.Tasks.AgentTestTest do
         {:file_a_again, file_a}
       ], test_dir)
 
-      # All should succeed
+      # All should succeed and have complete output
       for {{name, _}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_b, file_b}, {:file_a_again, file_a}], results) do
         assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
+        assert_complete_test_output(output, "no overlap - #{name}")
       end
 
       # Should have 2 test runs (A and B) and 1 replay (second A)
@@ -366,6 +379,10 @@ defmodule Mix.Tasks.AgentTestTest do
       assert exit1 == 0, "file_a failed with exit code #{exit1}:\n#{output1}"
       assert exit2 == 0, "all_files failed with exit code #{exit2}:\n#{output2}"
 
+      # Verify complete test output for each run
+      assert_complete_test_output(output1, "waiter wants superset - file_a")
+      assert_complete_test_output(output2, "waiter wants superset - all_files")
+
       # Both should run tests - Task 2 can't reuse Task 1's partial results
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
 
@@ -390,6 +407,10 @@ defmodule Mix.Tasks.AgentTestTest do
 
       assert exit1 == 0, "all_files failed with exit code #{exit1}:\n#{output1}"
       assert exit2 == 0, "file_a failed with exit code #{exit2}:\n#{output2}"
+
+      # Verify complete test output for each run
+      assert_complete_test_output(output1, "runner does all - all_files")
+      assert_complete_test_output(output2, "runner does all - file_a")
 
       # Task 1 runs all, Task 2 should replay (its file A is covered by "all")
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
@@ -419,6 +440,10 @@ defmodule Mix.Tasks.AgentTestTest do
 
       assert exit1 == 0, "files_ab failed with exit code #{exit1}:\n#{output1}"
       assert exit2 == 0, "files_bc failed with exit code #{exit2}:\n#{output2}"
+
+      # Verify complete test output for each run
+      assert_complete_test_output(output1, "partial overlap - files_ab")
+      assert_complete_test_output(output2, "partial overlap - files_bc")
 
       # Both should run - Task 2 needs file C which wasn't covered by Task 1
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
@@ -463,6 +488,9 @@ defmodule Mix.Tasks.AgentTestTest do
 
       assert exit_code == 0, "Task failed with exit code #{exit_code}:\n#{output}"
 
+      # Verify complete test output
+      assert_complete_test_output(output, "stale lock recovery")
+
       # Read the log
       debug_log = Path.join(test_dir, "agent_test.log")
       log_content = if File.exists?(debug_log), do: File.read!(debug_log), else: ""
@@ -497,6 +525,8 @@ defmodule Mix.Tasks.AgentTestTest do
       assert exit_code == 0, "agent_test failed:\n#{output}"
       # ExUnit outputs "Top N slowest" when --slowest is used
       assert output =~ ~r/Top \d+ slowest/, "Expected 'Top N slowest' output in:\n#{output}"
+      # Verify complete test output
+      assert_complete_test_output(output, "--slowest flag test")
     end
 
     @tag :integration
@@ -524,6 +554,8 @@ defmodule Mix.Tasks.AgentTestTest do
       assert exit_code == 0, "agent_test failed:\n#{output}"
       # --trace outputs each test name with timing, look for characteristic pattern
       assert String.contains?(output, "test "), "Expected --trace output in:\n#{output}"
+      # Note: --trace mode outputs test names instead of dots, so we verify the summary exists
+      assert output =~ ~r/\d+ tests?, \d+ failures?/, "Expected test summary in --trace output:\n#{output}"
     end
   end
 
@@ -635,5 +667,103 @@ defmodule Mix.Tasks.AgentTestTest do
     log_content
     |> String.split("\n")
     |> Enum.count(&String.contains?(&1, pattern))
+  end
+
+  # Helper to verify test output has correct number of results
+  # Checks that we have at least the expected number of test result indicators
+  # The main goal is to catch truncated/incomplete output (fewer results than expected)
+  defp assert_complete_test_output(output, test_name) do
+    # Check for completion indicators
+    has_finished = String.contains?(output, "Finished in")
+    dot_count = count_dots(output)
+
+    # Extract the test summary if present
+    case Regex.run(~r/(\d+) tests?, (\d+) failures?/, output) do
+      [_, test_count_str, failure_count_str] ->
+        test_count = String.to_integer(test_count_str)
+        failure_count = String.to_integer(failure_count_str)
+        pass_count = test_count - failure_count
+
+        # Check if this is --trace mode (lists test names instead of dots)
+        is_trace_mode = output =~ ~r/test .+\([\d.]+m?s\)/
+
+        if is_trace_mode do
+          # In trace mode, count test lines instead of dots
+          # Lines look like: "  * test something (0.5ms) [L#6]"
+          test_lines = count_trace_test_lines(output)
+          assert test_lines >= test_count,
+            "#{test_name}: Expected at least #{test_count} test result lines in trace mode, got #{test_lines}.\n" <>
+            "This may indicate incomplete test output.\n" <>
+            "Output:\n#{output}"
+        else
+          # In normal mode, count dots for passing tests
+          # We should have at least as many dots as passing tests
+          assert dot_count >= pass_count,
+            "#{test_name}: Expected at least #{pass_count} dots (passes), got #{dot_count}.\n" <>
+            "This may indicate incomplete/truncated test output.\n" <>
+            "Output:\n#{output}"
+        end
+
+        :ok
+
+      nil ->
+        # No test summary found - check for other signs of completion or valid output
+        cond do
+          has_finished ->
+            # Has "Finished in" but no summary - unusual but could be valid
+            :ok
+
+          dot_count > 0 and String.contains?(output, "Including tags:") ->
+            # Has progress indicators and ExUnit started - output might be truncated
+            # This is the pattern the user described (dots but no summary with % at end)
+            flunk(
+              "#{test_name}: Test output appears truncated - has #{dot_count} progress indicators but no completion summary.\n" <>
+              "This may indicate the output was cut off before tests finished.\n" <>
+              "Output:\n#{output}"
+            )
+
+          String.contains?(output, "Compiling") or String.contains?(output, "Including tags:") ->
+            # Test started but no results - might be replayed/cached result with minimal output
+            :ok
+
+          true ->
+            flunk("#{test_name}: No test output found.\nOutput:\n#{output}")
+        end
+    end
+  end
+
+  # Count dots (.) in test output - these indicate passing tests in normal mode
+  # Dots appear at the start of lines, possibly followed by warnings
+  defp count_dots(output) do
+    output
+    |> String.split("\n")
+    |> Enum.map(fn line ->
+      # Match dots at the start of lines (progress indicators)
+      # Pattern: line starts with one or more dots, optionally followed by spaces and other content
+      case Regex.run(~r/^([.]+)/, line) do
+        [_, dots] ->
+          String.length(dots)
+        nil ->
+          # Also check for lines that are only dots (possibly with whitespace around)
+          trimmed = String.trim(line)
+          if Regex.match?(~r/^[.]+$/, trimmed) do
+            String.length(trimmed)
+          else
+            0
+          end
+      end
+    end)
+    |> Enum.sum()
+  end
+
+  # Count test lines in --trace mode output
+  # These look like: "  * test something (0.5ms) [L#6]"
+  defp count_trace_test_lines(output) do
+    output
+    |> String.split("\n")
+    |> Enum.count(fn line ->
+      # Match lines that show a completed test with timing
+      line =~ ~r/test .+\([\d.]+m?s\)/
+    end)
   end
 end
