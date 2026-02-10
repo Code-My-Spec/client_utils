@@ -207,6 +207,7 @@ defmodule ClientUtils.TestFormatter do
   end
 
   defp write_to_file(json, output_file) do
+    output_file |> Path.dirname() |> File.mkdir_p!()
     File.write!(output_file, json)
   end
 end
