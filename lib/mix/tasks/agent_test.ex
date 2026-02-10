@@ -36,6 +36,7 @@ defmodule Mix.Tasks.AgentTest do
   def run(argv) do
     setup_logging()
     cleanup_stale_callers()
+    cleanup_stale_lock()
     requested_at = DateTime.utc_now()
     {files, opts} = extract_files_and_opts(argv)
     my_pid = System.pid()
@@ -326,6 +327,31 @@ defmodule Mix.Tasks.AgentTest do
         end)
       {:error, :enoent} ->
         :ok
+    end
+  end
+
+  defp cleanup_stale_lock do
+    case File.read(lock_file()) do
+      {:error, :enoent} ->
+        :ok
+
+      {:ok, content} ->
+        case Jason.decode(content) do
+          {:ok, %{"pid" => pid}} ->
+            unless process_alive?(pid) do
+              debug_log("cleanup_stale_lock() removing stale lock for dead pid=#{pid}, clearing cache")
+              File.rm(lock_file())
+              # The run that held this lock didn't finish cleanly,
+              # so cached events may be stale/incomplete — clear them
+              TestCache.clear()
+            end
+
+          _ ->
+            # Invalid/corrupt lock file — remove it and clear cache
+            debug_log("cleanup_stale_lock() removing invalid lock file, clearing cache")
+            File.rm(lock_file())
+            TestCache.clear()
+        end
     end
   end
 

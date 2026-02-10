@@ -502,6 +502,138 @@ defmodule Mix.Tasks.AgentTestTest do
 
     @tag :integration
     @tag timeout: 60_000
+    test "stale lock with cached events: clears cache and runs fresh" do
+      # Scenario: A previous run cached events, then a subsequent run crashed
+      # leaving a stale lock file. The next run should clear both the stale
+      # lock AND the cache, then run tests fresh instead of replaying stale cache.
+
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+      abs_file_a = Path.expand(Path.join(@fixture_project_path, file_a))
+
+      # Step 1: Run tests once to populate the cache
+      {output1, exit_code1} =
+        System.cmd(
+          "mix",
+          ["agent_test", file_a],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_DEBUG", "true"},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code1 == 0, "Initial run failed:\n#{output1}"
+
+      # Verify cache has events from run 1
+      cache_cutoff = DateTime.add(DateTime.utc_now(), -60, :second)
+      events = TestCache.get_events_for_file(abs_file_a, cache_cutoff)
+      assert length(events) > 0, "Cache should have events after first run"
+
+      # Step 2: Simulate a crash by writing a stale lock file (dead PID)
+      lock_file = Path.join(test_dir, "agent_test.lock.json")
+      stale_lock = Jason.encode!(%{
+        "pid" => "999999",
+        "files" => [abs_file_a],
+        "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+      File.write!(lock_file, stale_lock)
+
+      # Step 3: Run tests again — should detect stale lock, clear cache, run fresh
+      {output2, exit_code2} =
+        System.cmd(
+          "mix",
+          ["agent_test", file_a],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_DEBUG", "true"},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code2 == 0, "Second run failed:\n#{output2}"
+      assert_complete_test_output(output2, "stale lock with cached events")
+
+      # Read the debug log
+      debug_log = Path.join(test_dir, "agent_test.log")
+      log_content = if File.exists?(debug_log), do: File.read!(debug_log), else: ""
+
+      # Should have detected and cleaned the stale lock
+      assert String.contains?(log_content, "cleanup_stale_lock()"),
+        "Expected stale lock cleanup in log:\n#{log_content}"
+
+      # The second run should have become a RUNNER (not waiter),
+      # because the cache was cleared along with the stale lock
+      runner_lines = log_content
+        |> String.split("\n")
+        |> Enum.filter(&String.contains?(&1, "run_or_wait() runner, running tests"))
+
+      # We expect 2 runner entries total (run 1 + run 2), not 1 runner + 1 waiter
+      assert length(runner_lines) == 2,
+        "Expected 2 runner runs (both should run fresh), got #{length(runner_lines)}.\nLog:\n#{log_content}"
+
+      # Lock file should be cleaned up
+      refute File.exists?(lock_file), "Stale lock file should have been removed"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
+    test "corrupt lock file: clears cache and runs fresh" do
+      # Scenario: Lock file exists but contains invalid JSON
+      # Expected: Should remove corrupt lock, clear cache, and become runner
+
+      test_dir = unique_test_dir()
+      File.mkdir_p!(test_dir)
+
+      file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
+
+      # Create a corrupt lock file
+      lock_file = Path.join(test_dir, "agent_test.lock.json")
+      File.write!(lock_file, "not valid json {{{")
+
+      {output, exit_code} =
+        System.cmd(
+          "mix",
+          ["agent_test", file_a],
+          cd: @fixture_project_path,
+          env: [
+            {"MIX_ENV", "test"},
+            {"AGENT_TEST_DIR", test_dir},
+            {"AGENT_TEST_DEBUG", "true"},
+            {"AGENT_TEST_EVENTS_FILE", @shared_events_file}
+          ],
+          stderr_to_stdout: true
+        )
+
+      assert exit_code == 0, "Task failed with exit code #{exit_code}:\n#{output}"
+      assert_complete_test_output(output, "corrupt lock file")
+
+      # Read the debug log
+      debug_log = Path.join(test_dir, "agent_test.log")
+      log_content = if File.exists?(debug_log), do: File.read!(debug_log), else: ""
+
+      # Should have detected and cleaned the invalid lock
+      assert String.contains?(log_content, "removing invalid lock file"),
+        "Expected invalid lock cleanup in log:\n#{log_content}"
+
+      # Should have become runner
+      runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
+      assert runner_count == 1, "Expected 1 runner, got #{runner_count}. Log:\n#{log_content}"
+
+      # Lock file should be cleaned up
+      refute File.exists?(lock_file), "Corrupt lock file should have been removed"
+    end
+
+    @tag :integration
+    @tag timeout: 60_000
     test "--slowest flag is passed through to mix test" do
       # Verify that CLI options like --slowest are properly passed through
 
