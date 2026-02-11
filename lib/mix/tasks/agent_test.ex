@@ -318,13 +318,26 @@ defmodule Mix.Tasks.AgentTest do
   defp cleanup_stale_callers do
     case File.ls(callers_dir()) do
       {:ok, files} ->
-        Enum.each(files, fn file ->
-          pid = file |> Path.basename(".json")
-          unless process_alive?(pid) do
-            debug_log("cleanup_stale_callers() removing stale caller file for pid=#{pid}")
-            File.rm(Path.join(callers_dir(), file))
-          end
-        end)
+        live_callers =
+          Enum.filter(files, fn file ->
+            pid = file |> Path.basename(".json")
+
+            if process_alive?(pid) do
+              true
+            else
+              debug_log("cleanup_stale_callers() removing stale caller file for pid=#{pid}")
+              File.rm(Path.join(callers_dir(), file))
+              false
+            end
+          end)
+
+        # If no live callers remain, any cached events are from a completed session
+        # and should not cause a new invocation to become a waiter
+        if live_callers == [] do
+          debug_log("cleanup_stale_callers() no live callers, clearing stale event cache")
+          TestCache.clear()
+        end
+
       {:error, :enoent} ->
         :ok
     end
