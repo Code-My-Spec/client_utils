@@ -5,8 +5,10 @@ defmodule ClientUtils.TestFormatter do
   ExUnit formatter that:
   - Delegates to CLIFormatter for normal terminal output
   - Writes JSON results to a file (if configured)
-  - Caches test events to DETS for later querying
+  - Caches test events for later querying
   """
+
+  require Logger
 
   alias ClientUtils.TestFormatter.JsonFormatter
   alias ClientUtils.TestFormatter.TestCache
@@ -52,66 +54,20 @@ defmodule ClientUtils.TestFormatter do
 
   def handle_cast({:suite_started, _opts} = event, state) do
     start_time = NaiveDateTime.utc_now()
-
-    # Forward to CLI formatter
     GenServer.cast(state.cli_formatter, event)
-
     {:noreply, %{state | start_time: start_time}}
   end
 
   def handle_cast({:suite_finished, run_us, load_us} = event, state) do
-    # Flush cached events
-    TestCache.store_events(state.events)
-
-    # Write JSON to file if configured
-    if state.output_file do
-      stats = JsonFormatter.format_stats(state, run_us, load_us)
-
-      stats
-      |> JsonFormatter.format_suite_result(state.tests, state.failures, state.pending)
-      |> Jason.encode!()
-      |> write_to_file(state.output_file)
-    end
-
-    # Forward to CLI formatter
+    flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
-
     {:noreply, %{state | events: []}}
   end
 
   def handle_cast({:suite_finished, %{run: run_us, load: load_us}} = event, state) do
-    # Flush cached events
-    TestCache.store_events(state.events)
-
-    # Write JSON to file if configured
-    if state.output_file do
-      stats = JsonFormatter.format_stats(state, run_us, load_us)
-
-      stats
-      |> JsonFormatter.format_suite_result(state.tests, state.failures, state.pending)
-      |> Jason.encode!()
-      |> write_to_file(state.output_file)
-    end
-
-    # Forward to CLI formatter
+    flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
-
     {:noreply, %{state | events: []}}
-  end
-
-  def handle_cast({:case_started, _} = event, state) do
-    GenServer.cast(state.cli_formatter, event)
-    {:noreply, collect_event(state, event)}
-  end
-
-  def handle_cast({:module_started, _} = event, state) do
-    GenServer.cast(state.cli_formatter, event)
-    {:noreply, collect_event(state, event)}
-  end
-
-  def handle_cast({:module_finished, _} = event, state) do
-    GenServer.cast(state.cli_formatter, event)
-    {:noreply, collect_event(state, event)}
   end
 
   def handle_cast(
@@ -204,6 +160,28 @@ defmodule ClientUtils.TestFormatter do
 
   defp collect_event(state, event) do
     %{state | events: state.events ++ [event]}
+  end
+
+  defp flush_results(state, run_us, load_us) do
+    # Cache and file writes are best-effort — never crash the formatter
+    try do
+      TestCache.store_events(state.events)
+    rescue
+      e -> Logger.warning("TestCache.store_events failed: #{Exception.message(e)}")
+    end
+
+    if state.output_file do
+      try do
+        stats = JsonFormatter.format_stats(state, run_us, load_us)
+
+        stats
+        |> JsonFormatter.format_suite_result(state.tests, state.failures, state.pending)
+        |> Jason.encode!()
+        |> write_to_file(state.output_file)
+      rescue
+        e -> Logger.warning("JSON output write failed: #{Exception.message(e)}")
+      end
+    end
   end
 
   defp write_to_file(json, output_file) do

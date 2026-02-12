@@ -199,14 +199,9 @@ defmodule ClientUtils.TestFormatter.TestCache do
   defp write_events_file(data) do
     file = events_file()
     dir = Path.dirname(file)
-    tmp_file = file <> ".tmp"
 
-    # Ensure directory exists
     File.mkdir_p!(dir)
-
-    # Atomic write: write to temp file, then rename
-    File.write!(tmp_file, Jason.encode!(data, pretty: true))
-    File.rename!(tmp_file, file)
+    File.write!(file, Jason.encode!(data, pretty: true))
   end
 
   defp ensure_structure(data) do
