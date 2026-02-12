@@ -310,14 +310,19 @@ defmodule Mix.Tasks.AgentTestTest do
       test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:file_a, file_a},
-        {:file_a_2, file_a},
-        {:file_a_3, file_a}
-      ], test_dir)
+      {results, log_content} =
+        run_concurrent_tasks(
+          [
+            {:file_a, file_a},
+            {:file_a_2, file_a},
+            {:file_a_3, file_a}
+          ],
+          test_dir
+        )
 
       # All should succeed and have complete output
-      for {{name, _file}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_a_2, file_a}, {:file_a_3, file_a}], results) do
+      for {{name, _file}, {output, exit_code}} <-
+            Enum.zip([{:file_a, file_a}, {:file_a_2, file_a}, {:file_a_3, file_a}], results) do
         assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
         assert_complete_test_output(output, "all same file - #{name}")
       end
@@ -340,14 +345,19 @@ defmodule Mix.Tasks.AgentTestTest do
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
       file_b = "test/test_phoenix_project/blog_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:file_a, file_a},
-        {:file_b, file_b},
-        {:file_a_again, file_a}
-      ], test_dir)
+      {results, log_content} =
+        run_concurrent_tasks(
+          [
+            {:file_a, file_a},
+            {:file_b, file_b},
+            {:file_a_again, file_a}
+          ],
+          test_dir
+        )
 
       # All should succeed and have complete output
-      for {{name, _}, {output, exit_code}} <- Enum.zip([{:file_a, file_a}, {:file_b, file_b}, {:file_a_again, file_a}], results) do
+      for {{name, _}, {output, exit_code}} <-
+            Enum.zip([{:file_a, file_a}, {:file_b, file_b}, {:file_a_again, file_a}], results) do
         assert exit_code == 0, "#{name} failed with exit code #{exit_code}:\n#{output}"
         assert_complete_test_output(output, "no overlap - #{name}")
       end
@@ -369,10 +379,15 @@ defmodule Mix.Tasks.AgentTestTest do
       test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:file_a, file_a},
-        {:all_files, nil}  # nil means all files
-      ], test_dir)
+      {results, log_content} =
+        run_concurrent_tasks(
+          [
+            {:file_a, file_a},
+            # nil means all files
+            {:all_files, nil}
+          ],
+          test_dir
+        )
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -398,10 +413,14 @@ defmodule Mix.Tasks.AgentTestTest do
       test_dir = unique_test_dir()
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:all_files, nil},
-        {:file_a, file_a}
-      ], test_dir)
+      {results, log_content} =
+        run_concurrent_tasks(
+          [
+            {:all_files, nil},
+            {:file_a, file_a}
+          ],
+          test_dir
+        )
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -431,10 +450,14 @@ defmodule Mix.Tasks.AgentTestTest do
       file_b = "test/test_phoenix_project/blog_test.exs"
       file_c = "test/test_phoenix_project/accounts_test.exs"
 
-      {results, log_content} = run_concurrent_tasks([
-        {:files_ab, [file_a, file_b]},
-        {:files_bc, [file_b, file_c]}
-      ], test_dir)
+      {results, log_content} =
+        run_concurrent_tasks(
+          [
+            {:files_ab, [file_a, file_b]},
+            {:files_bc, [file_b, file_c]}
+          ],
+          test_dir
+        )
 
       [{output1, exit1}, {output2, exit2}] = results
 
@@ -462,11 +485,14 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Create a stale lock file with a non-existent PID
       lock_file = Path.join(test_dir, "agent_test.lock.json")
-      stale_lock = Jason.encode!(%{
-        "pid" => "999999",
-        "files" => [],
-        "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+
+      stale_lock =
+        Jason.encode!(%{
+          "pid" => "999999",
+          "files" => [],
+          "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
       File.write!(lock_file, stale_lock)
 
       file_a = "test/test_phoenix_project/blog/post_cache_test.exs"
@@ -497,7 +523,9 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Should have detected stale lock and become runner
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
-      assert runner_count == 1, "Expected 1 runner (stale lock should be ignored). Log:\n#{log_content}"
+
+      assert runner_count == 1,
+             "Expected 1 runner (stale lock should be ignored). Log:\n#{log_content}"
     end
 
     @tag :integration
@@ -537,11 +565,14 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Step 2: Simulate a crash by writing a stale lock file (dead PID)
       lock_file = Path.join(test_dir, "agent_test.lock.json")
-      stale_lock = Jason.encode!(%{
-        "pid" => "999999",
-        "files" => [abs_file_a],
-        "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-      })
+
+      stale_lock =
+        Jason.encode!(%{
+          "pid" => "999999",
+          "files" => [abs_file_a],
+          "started_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        })
+
       File.write!(lock_file, stale_lock)
 
       # Step 3: Run tests again — should detect stale lock, clear cache, run fresh
@@ -568,17 +599,18 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Should have detected and cleaned the stale lock
       assert String.contains?(log_content, "cleanup_stale_lock()"),
-        "Expected stale lock cleanup in log:\n#{log_content}"
+             "Expected stale lock cleanup in log:\n#{log_content}"
 
       # The second run should have become a RUNNER (not waiter),
       # because the cache was cleared along with the stale lock
-      runner_lines = log_content
+      runner_lines =
+        log_content
         |> String.split("\n")
         |> Enum.filter(&String.contains?(&1, "run_or_wait() runner, running tests"))
 
       # We expect 2 runner entries total (run 1 + run 2), not 1 runner + 1 waiter
       assert length(runner_lines) == 2,
-        "Expected 2 runner runs (both should run fresh), got #{length(runner_lines)}.\nLog:\n#{log_content}"
+             "Expected 2 runner runs (both should run fresh), got #{length(runner_lines)}.\nLog:\n#{log_content}"
 
       # Lock file should be cleaned up
       refute File.exists?(lock_file), "Stale lock file should have been removed"
@@ -622,7 +654,7 @@ defmodule Mix.Tasks.AgentTestTest do
 
       # Should have detected and cleaned the invalid lock
       assert String.contains?(log_content, "removing invalid lock file"),
-        "Expected invalid lock cleanup in log:\n#{log_content}"
+             "Expected invalid lock cleanup in log:\n#{log_content}"
 
       # Should have become runner
       runner_count = count_log_matches(log_content, "run_or_wait() runner, running tests")
@@ -687,7 +719,8 @@ defmodule Mix.Tasks.AgentTestTest do
       # --trace outputs each test name with timing, look for characteristic pattern
       assert String.contains?(output, "test "), "Expected --trace output in:\n#{output}"
       # Note: --trace mode outputs test names instead of dots, so we verify the summary exists
-      assert output =~ ~r/\d+ tests?, \d+ failures?/, "Expected test summary in --trace output:\n#{output}"
+      assert output =~ ~r/\d+ tests?, \d+ failures?/,
+             "Expected test summary in --trace output:\n#{output}"
     end
   end
 
@@ -742,20 +775,29 @@ defmodule Mix.Tasks.AgentTestTest do
     File.mkdir_p!(test_dir)
     debug_log = Path.join(test_dir, "agent_test.log")
 
+    # Normalize tasks to {name, files, stagger_ms} tuples
+    # Accepts {name, files} (default 50ms stagger) or {name, files, stagger_ms}
+    normalized =
+      Enum.map(tasks, fn
+        {name, files, stagger_ms} -> {name, files, stagger_ms}
+        {name, files} -> {name, files, 50}
+      end)
+
     # Build async tasks with staggered starts
     async_tasks =
-      tasks
+      normalized
       |> Enum.with_index()
-      |> Enum.map(fn {{name, files}, index} ->
-        # Stagger starts to ensure order with System.cmd process spawning
-        if index > 0, do: Process.sleep(500)
+      |> Enum.map(fn {{name, files, stagger_ms}, index} ->
+        if index > 0, do: Process.sleep(stagger_ms)
 
         Task.async(fn ->
-          args = case files do
-            nil -> []  # all files
-            list when is_list(list) -> list
-            file -> [file]
-          end
+          args =
+            case files do
+              # all files
+              nil -> []
+              list when is_list(list) -> list
+              file -> [file]
+            end
 
           Logger.info("#{name} starting with args: #{inspect(args)}")
 
@@ -782,17 +824,20 @@ defmodule Mix.Tasks.AgentTestTest do
     results = Task.await_many(async_tasks, 150_000)
 
     # Read debug log
-    log_content = if File.exists?(debug_log) do
-      File.read!(debug_log)
-    else
-      ""
-    end
+    log_content =
+      if File.exists?(debug_log) do
+        File.read!(debug_log)
+      else
+        ""
+      end
 
     {results, log_content}
   end
 
   defp unique_test_dir do
-    Path.expand(Path.join(@fixture_project_path, ".code_my_spec/test_#{:rand.uniform(1_000_000)}"))
+    Path.expand(
+      Path.join(@fixture_project_path, ".code_my_spec/test_#{:rand.uniform(1_000_000)}")
+    )
   end
 
   defp count_log_matches(log_content, pattern) do
@@ -823,17 +868,18 @@ defmodule Mix.Tasks.AgentTestTest do
           # In trace mode, count test lines instead of dots
           # Lines look like: "  * test something (0.5ms) [L#6]"
           test_lines = count_trace_test_lines(output)
+
           assert test_lines >= test_count,
-            "#{test_name}: Expected at least #{test_count} test result lines in trace mode, got #{test_lines}.\n" <>
-            "This may indicate incomplete test output.\n" <>
-            "Output:\n#{output}"
+                 "#{test_name}: Expected at least #{test_count} test result lines in trace mode, got #{test_lines}.\n" <>
+                   "This may indicate incomplete test output.\n" <>
+                   "Output:\n#{output}"
         else
           # In normal mode, count dots for passing tests
           # We should have at least as many dots as passing tests
           assert dot_count >= pass_count,
-            "#{test_name}: Expected at least #{pass_count} dots (passes), got #{dot_count}.\n" <>
-            "This may indicate incomplete/truncated test output.\n" <>
-            "Output:\n#{output}"
+                 "#{test_name}: Expected at least #{pass_count} dots (passes), got #{dot_count}.\n" <>
+                   "This may indicate incomplete/truncated test output.\n" <>
+                   "Output:\n#{output}"
         end
 
         :ok
@@ -850,8 +896,8 @@ defmodule Mix.Tasks.AgentTestTest do
             # This is the pattern the user described (dots but no summary with % at end)
             flunk(
               "#{test_name}: Test output appears truncated - has #{dot_count} progress indicators but no completion summary.\n" <>
-              "This may indicate the output was cut off before tests finished.\n" <>
-              "Output:\n#{output}"
+                "This may indicate the output was cut off before tests finished.\n" <>
+                "Output:\n#{output}"
             )
 
           String.contains?(output, "Compiling") or String.contains?(output, "Including tags:") ->
@@ -875,9 +921,11 @@ defmodule Mix.Tasks.AgentTestTest do
       case Regex.run(~r/^([.]+)/, line) do
         [_, dots] ->
           String.length(dots)
+
         nil ->
           # Also check for lines that are only dots (possibly with whitespace around)
           trimmed = String.trim(line)
+
           if Regex.match?(~r/^[.]+$/, trimmed) do
             String.length(trimmed)
           else
