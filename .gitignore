@@ -25,3 +25,8 @@ fixtures/*.dets
 
 # Hex package artifacts
 client_utils*.tar
+
+# Generated/tool artifacts
+.code_my_spec/
+code_my_spec_claude_code_extension/
+repomix-output.xml
