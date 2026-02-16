@@ -28,7 +28,7 @@ defmodule ClientUtils.DiagnosticsFormat do
       position: format_position(diagnostic.position),
       compiler_name: diagnostic.compiler_name,
       span: format_span(diagnostic.span),
-      details: diagnostic.details,
+      details: format_details(diagnostic.details),
       stacktrace: format_stacktrace(diagnostic.stacktrace)
     }
   end
@@ -68,6 +68,16 @@ defmodule ClientUtils.DiagnosticsFormat do
         inspect(other)
     end)
   end
+
+  defp format_details(nil), do: nil
+  defp format_details(d) when is_binary(d) or is_number(d) or is_atom(d), do: d
+  defp format_details(d) when is_map(d) or is_list(d) do
+    case Jason.encode(d) do
+      {:ok, _} -> d
+      {:error, _} -> inspect(d)
+    end
+  end
+  defp format_details(d), do: inspect(d)
 
   defp format_arity(arity) when is_integer(arity), do: arity
   defp format_arity(args) when is_list(args), do: length(args)
