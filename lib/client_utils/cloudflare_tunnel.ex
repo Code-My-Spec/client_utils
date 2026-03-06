@@ -1,6 +1,10 @@
 defmodule ClientUtils.CloudflareTunnel do
   @moduledoc """
-  GenServer that manages a Cloudflare Quick Tunnel via an Erlang port.
+  GenServer that manages a Cloudflare Tunnel process via an Erlang port.
+
+  Supports two modes:
+
+  ## Quick tunnel (default)
 
   Runs `cloudflared tunnel --url <origin>` which assigns a random
   `*.trycloudflare.com` URL — no account, credentials, or DNS required.
@@ -9,23 +13,43 @@ defmodule ClientUtils.CloudflareTunnel do
   reconfigures the Phoenix endpoint so URL helpers generate correct
   public URLs.
 
-  ## Required opts
+      {ClientUtils.CloudflareTunnel,
+        origin_url: "http://127.0.0.1:4000",
+        endpoint: MyAppWeb.Endpoint,
+        otp_app: :my_app}
+
+  ## Named tunnel
+
+  Uses a pre-configured Cloudflare named tunnel with a fixed hostname.
+  Requires credentials and DNS configured in Cloudflare dashboard.
+
+      {ClientUtils.CloudflareTunnel,
+        mode: :named,
+        hostname: "dev.myapp.com",
+        tunnel_id: "...",
+        account_tag: "...",
+        tunnel_secret: "...",
+        origin_url: "http://127.0.0.1:4000",
+        endpoint: MyAppWeb.Endpoint,
+        otp_app: :my_app}
+
+  ## Required opts (both modes)
 
     * `:origin_url` — local origin URL (e.g. `"http://127.0.0.1:4000"`)
     * `:endpoint` — Phoenix Endpoint module (e.g. `MyAppWeb.Endpoint`)
     * `:otp_app` — OTP app atom (e.g. `:my_app`)
 
+  ## Additional required opts (named mode)
+
+    * `:hostname` — public hostname for the tunnel
+    * `:tunnel_id` — Cloudflare tunnel UUID
+    * `:account_tag` — Cloudflare account tag
+    * `:tunnel_secret` — tunnel credential secret (base64)
+
   ## Optional opts
 
+    * `:mode` — `:quick` (default) or `:named`
     * `:name` — GenServer name registration (default: `__MODULE__`)
-
-  ## Usage
-
-      # In your application.ex (dev only), AFTER the Endpoint:
-      {ClientUtils.CloudflareTunnel,
-        origin_url: "http://127.0.0.1:4000",
-        endpoint: MyAppWeb.Endpoint,
-        otp_app: :my_app}
   """
 
   use GenServer
@@ -60,24 +84,59 @@ defmodule ClientUtils.CloudflareTunnel do
         :ignore
 
       cloudflared ->
-        origin_url = Keyword.fetch!(opts, :origin_url)
-        endpoint = Keyword.fetch!(opts, :endpoint)
-        otp_app = Keyword.fetch!(opts, :otp_app)
+        mode = Keyword.get(opts, :mode, :quick)
+        init_mode(mode, cloudflared, opts)
+    end
+  end
 
-        Logger.info("[CloudflareTunnel] Starting quick tunnel for #{origin_url}")
+  defp init_mode(:quick, cloudflared, opts) do
+    origin_url = Keyword.fetch!(opts, :origin_url)
+    endpoint = Keyword.fetch!(opts, :endpoint)
+    otp_app = Keyword.fetch!(opts, :otp_app)
 
-        port =
-          Port.open(
-            {:spawn_executable, cloudflared},
-            [
-              :binary,
-              :exit_status,
-              :stderr_to_stdout,
-              args: ["tunnel", "--no-autoupdate", "--url", origin_url]
-            ]
-          )
+    Logger.info("[CloudflareTunnel] Starting quick tunnel for #{origin_url}")
 
-        {:ok, %{port: port, url: nil, endpoint: endpoint, otp_app: otp_app}}
+    port =
+      Port.open(
+        {:spawn_executable, cloudflared},
+        [
+          :binary,
+          :exit_status,
+          :stderr_to_stdout,
+          args: ["tunnel", "--no-autoupdate", "--url", origin_url]
+        ]
+      )
+
+    {:ok, %{port: port, url: nil, mode: :quick, endpoint: endpoint, otp_app: otp_app}}
+  end
+
+  defp init_mode(:named, cloudflared, opts) do
+    if opts[:tunnel_secret] in [nil, ""] do
+      Logger.warning("[CloudflareTunnel] No tunnel_secret configured — tunnel disabled")
+      :ignore
+    else
+      hostname = Keyword.fetch!(opts, :hostname)
+      endpoint = Keyword.fetch!(opts, :endpoint)
+      otp_app = Keyword.fetch!(opts, :otp_app)
+
+      write_config(opts)
+      Logger.info("[CloudflareTunnel] Starting named tunnel → https://#{hostname}")
+
+      port =
+        Port.open(
+          {:spawn_executable, cloudflared},
+          [
+            :binary,
+            :exit_status,
+            :stderr_to_stdout,
+            args: ["tunnel", "--no-autoupdate", "run"]
+          ]
+        )
+
+      url = "https://#{hostname}"
+      configure_endpoint(url, %{endpoint: endpoint, otp_app: otp_app})
+
+      {:ok, %{port: port, url: url, mode: :named, endpoint: endpoint, otp_app: otp_app}}
     end
   end
 
@@ -93,7 +152,7 @@ defmodule ClientUtils.CloudflareTunnel do
     end
 
     state =
-      if is_nil(state.url) do
+      if state.mode == :quick and is_nil(state.url) do
         case parse_url(data) do
           nil ->
             state
@@ -135,5 +194,41 @@ defmodule ClientUtils.CloudflareTunnel do
     if function_exported?(endpoint, :config_change, 2) do
       endpoint.config_change([{endpoint, updated}], [])
     end
+  end
+
+  defp write_config(opts) do
+    base_dir = Keyword.get(opts, :base_dir, Path.join(File.cwd!(), "tmp/cloudflared"))
+    File.mkdir_p!(base_dir)
+    credentials_path = write_credentials(opts, base_dir)
+
+    yaml = """
+    tunnel: #{opts[:tunnel_id]}
+    credentials-file: #{credentials_path}
+
+    ingress:
+      - hostname: #{opts[:hostname]}
+        service: #{opts[:origin_url]}
+      - service: http_status:404
+    """
+
+    config_dir = Keyword.get(opts, :config_dir, Path.expand("~/.cloudflared"))
+    File.mkdir_p!(config_dir)
+    path = Path.join(config_dir, "config.yml")
+    File.write!(path, yaml)
+    path
+  end
+
+  defp write_credentials(opts, base_dir) do
+    json =
+      Jason.encode!(%{
+        "AccountTag" => opts[:account_tag],
+        "TunnelSecret" => opts[:tunnel_secret],
+        "TunnelID" => opts[:tunnel_id],
+        "Endpoint" => ""
+      })
+
+    path = Path.join(base_dir, "credentials.json")
+    File.write!(path, json)
+    path
   end
 end

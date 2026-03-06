@@ -34,13 +34,19 @@ defmodule ClientUtils.CloudflareTunnelTest do
 
   describe "handle_call :url" do
     test "returns nil when URL not yet parsed" do
-      state = %{port: nil, url: nil, endpoint: nil, otp_app: nil}
+      state = %{port: nil, url: nil, mode: :quick, endpoint: nil, otp_app: nil}
       assert {:reply, nil, ^state} = CloudflareTunnel.handle_call(:url, self(), state)
     end
 
-    test "returns URL when available" do
+    test "returns URL when available (quick mode)" do
       url = "https://test-tunnel.trycloudflare.com"
-      state = %{port: nil, url: url, endpoint: nil, otp_app: nil}
+      state = %{port: nil, url: url, mode: :quick, endpoint: nil, otp_app: nil}
+      assert {:reply, ^url, ^state} = CloudflareTunnel.handle_call(:url, self(), state)
+    end
+
+    test "returns URL when available (named mode)" do
+      url = "https://dev.myapp.com"
+      state = %{port: nil, url: url, mode: :named, endpoint: nil, otp_app: nil}
       assert {:reply, ^url, ^state} = CloudflareTunnel.handle_call(:url, self(), state)
     end
   end
@@ -51,7 +57,56 @@ defmodule ClientUtils.CloudflareTunnelTest do
 
       try do
         System.put_env("PATH", "/nonexistent")
-        assert :ignore = CloudflareTunnel.init(origin_url: "http://127.0.0.1:4000", endpoint: Foo, otp_app: :foo)
+
+        assert :ignore =
+                 CloudflareTunnel.init(
+                   origin_url: "http://127.0.0.1:4000",
+                   endpoint: Foo,
+                   otp_app: :foo
+                 )
+      after
+        System.put_env("PATH", existing)
+      end
+    end
+
+    test "returns :ignore for named mode when tunnel_secret is nil" do
+      existing = System.get_env("PATH")
+
+      try do
+        System.put_env("PATH", "/nonexistent")
+
+        assert :ignore =
+                 CloudflareTunnel.init(
+                   mode: :named,
+                   hostname: "dev.example.com",
+                   tunnel_id: "test-id",
+                   account_tag: "test-tag",
+                   origin_url: "http://127.0.0.1:4000",
+                   endpoint: Foo,
+                   otp_app: :foo
+                 )
+      after
+        System.put_env("PATH", existing)
+      end
+    end
+
+    test "returns :ignore for named mode when tunnel_secret is empty" do
+      existing = System.get_env("PATH")
+
+      try do
+        System.put_env("PATH", "/nonexistent")
+
+        assert :ignore =
+                 CloudflareTunnel.init(
+                   mode: :named,
+                   tunnel_secret: "",
+                   hostname: "dev.example.com",
+                   tunnel_id: "test-id",
+                   account_tag: "test-tag",
+                   origin_url: "http://127.0.0.1:4000",
+                   endpoint: Foo,
+                   otp_app: :foo
+                 )
       after
         System.put_env("PATH", existing)
       end
