@@ -48,6 +48,7 @@ defmodule ClientUtils.CloudflareTunnel do
 
   ## Optional opts
 
+    * `:enabled` — `true` (default) or `false`; when `false`, the tunnel is not started
     * `:mode` — `:quick` (default) or `:named`
     * `:name` — GenServer name registration (default: `__MODULE__`)
   """
@@ -78,6 +79,15 @@ defmodule ClientUtils.CloudflareTunnel do
 
   @impl true
   def init(opts) do
+    if Keyword.get(opts, :enabled, true) == false do
+      Logger.info("[CloudflareTunnel] Tunnel disabled via :enabled option")
+      :ignore
+    else
+      do_init(opts)
+    end
+  end
+
+  defp do_init(opts) do
     case System.find_executable("cloudflared") do
       nil ->
         Logger.warning("[CloudflareTunnel] cloudflared not found in PATH — tunnel disabled")
