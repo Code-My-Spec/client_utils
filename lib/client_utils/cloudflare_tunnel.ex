@@ -51,6 +51,9 @@ defmodule ClientUtils.CloudflareTunnel do
     * `:enabled` — `true` (default) or `false`; when `false`, the tunnel is not started
     * `:mode` — `:quick` (default) or `:named`
     * `:name` — GenServer name registration (default: `__MODULE__`)
+    * `:additional_hostnames` — list of extra hostnames to route through the tunnel
+      (named mode only). Each hostname is added as an ingress rule pointing to
+      the same `:origin_url`. Useful for white-label custom domains in dev.
   """
 
   use GenServer
@@ -211,13 +214,22 @@ defmodule ClientUtils.CloudflareTunnel do
     File.mkdir_p!(base_dir)
     credentials_path = write_credentials(opts, base_dir)
 
+    additional = Keyword.get(opts, :additional_hostnames, [])
+
+    extra_ingress =
+      additional
+      |> Enum.map(fn host -> "  - hostname: #{host}\n    service: #{opts[:origin_url]}" end)
+      |> Enum.join("\n")
+
+    extra_block = if extra_ingress == "", do: "", else: "\n" <> extra_ingress
+
     yaml = """
     tunnel: #{opts[:tunnel_id]}
     credentials-file: #{credentials_path}
 
     ingress:
       - hostname: #{opts[:hostname]}
-        service: #{opts[:origin_url]}
+        service: #{opts[:origin_url]}#{extra_block}
       - service: http_status:404
     """
 
