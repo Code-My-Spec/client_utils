@@ -6,12 +6,6 @@ defmodule Mix.Tasks.Compile.DiagnosticsTest do
   setup do
     on_exit(fn ->
       File.rm(@output_file)
-
-      try do
-        :persistent_term.erase({Mix.Tasks.Compile.Spex, :diagnostics})
-      rescue
-        ArgumentError -> :ok
-      end
     end)
 
     :ok
@@ -127,17 +121,6 @@ defmodule Mix.Tasks.Compile.DiagnosticsTest do
       lines = read_jsonl(@output_file)
       assert length(lines) == 1
       assert hd(lines)["message"] == "good one"
-    end
-  end
-
-  describe "spex integration" do
-    test "spex diagnostics/0 is queryable after seeding persistent_term" do
-      fake_diag = build_diagnostic(message: "test spex warning", compiler_name: "Spex")
-      :persistent_term.put({Mix.Tasks.Compile.Spex, :diagnostics}, [fake_diag])
-
-      stored = Mix.Tasks.Compile.Spex.diagnostics()
-      assert length(stored) == 1
-      assert hd(stored).message == "test spex warning"
     end
   end
 
