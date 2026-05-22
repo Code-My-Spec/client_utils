@@ -109,6 +109,12 @@ defmodule ClientUtils.CloudflareTunnel do
 
     Logger.info("[CloudflareTunnel] Starting quick tunnel for #{origin_url}")
 
+    # Pass --config pointing at a project-local empty file so cloudflared
+    # ignores any global ~/.cloudflared/config.yml that another project may
+    # have left behind (its catch-all ingress would 404 every quick tunnel
+    # request — see https://github.com/cloudflare/cloudflared/issues/...).
+    config_path = write_empty_config(opts)
+
     port =
       Port.open(
         {:spawn_executable, cloudflared},
@@ -116,7 +122,14 @@ defmodule ClientUtils.CloudflareTunnel do
           :binary,
           :exit_status,
           :stderr_to_stdout,
-          args: ["tunnel", "--no-autoupdate", "--url", origin_url]
+          args: [
+            "--config",
+            config_path,
+            "tunnel",
+            "--no-autoupdate",
+            "--url",
+            origin_url
+          ]
         ]
       )
 
@@ -132,7 +145,7 @@ defmodule ClientUtils.CloudflareTunnel do
       endpoint = Keyword.fetch!(opts, :endpoint)
       otp_app = Keyword.fetch!(opts, :otp_app)
 
-      write_config(opts)
+      config_path = write_config(opts)
       Logger.info("[CloudflareTunnel] Starting named tunnel → https://#{hostname}")
 
       port =
@@ -142,7 +155,7 @@ defmodule ClientUtils.CloudflareTunnel do
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            args: ["tunnel", "--no-autoupdate", "run"]
+            args: ["--config", config_path, "tunnel", "--no-autoupdate", "run"]
           ]
         )
 
@@ -233,10 +246,23 @@ defmodule ClientUtils.CloudflareTunnel do
       - service: http_status:404
     """
 
-    config_dir = Keyword.get(opts, :config_dir, Path.expand("~/.cloudflared"))
+    # Write to the project's tmp/cloudflared dir (not ~/.cloudflared) so
+    # multiple projects can run named tunnels on the same machine without
+    # clobbering each other's config — and so a quick tunnel from any
+    # project isn't poisoned by a leftover ingress rule.
+    config_dir = Keyword.get(opts, :config_dir, base_dir)
     File.mkdir_p!(config_dir)
     path = Path.join(config_dir, "config.yml")
     File.write!(path, yaml)
+    path
+  end
+
+  defp write_empty_config(opts) do
+    base_dir = Keyword.get(opts, :base_dir, Path.join(File.cwd!(), "tmp/cloudflared"))
+    File.mkdir_p!(base_dir)
+    path = Path.join(base_dir, "quick_config.yml")
+    # cloudflared rejects a fully empty file; a no-op key keeps it valid.
+    File.write!(path, "no-autoupdate: true\n")
     path
   end
 
