@@ -29,7 +29,7 @@ defmodule ClientUtils.MixProject do
 
   defp package do
     [
-      files: ["lib", "mix.exs", "README.md", "LICENSE"],
+      files: ["lib", "priv", "mix.exs", "README.md", "LICENSE"],
       maintainers: ["John Davenport"],
       licenses: ["Apache-2.0"],
       links: %{"GitHub" => @source_url}
