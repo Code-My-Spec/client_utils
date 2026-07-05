@@ -91,6 +91,13 @@ defmodule <%= @base %>.CodeMySpec.WidgetClient do
     {:noreply, socket}
   end
 
+  # Feedback rides the same deploy-key connection as chat — pushed to CodeMySpec
+  # as a `submit_feedback` event on the conversation topic.
+  def handle_cast({:submit_feedback, payload}, socket) do
+    push(socket, socket.assigns.topic, "submit_feedback", payload)
+    {:noreply, socket}
+  end
+
   @impl Slipstream
   def handle_disconnect(reason, socket) do
     attempts = socket.assigns.reconnect_attempts

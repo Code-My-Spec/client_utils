@@ -1,22 +1,28 @@
 defmodule Mix.Tasks.ClientUtils.Gen.ChatWidget do
-  @shortdoc "Generate the CodeMySpec chat widget (server-side Slipstream)"
+  @shortdoc "Generate the CodeMySpec support widget (chat + feedback, server-side Slipstream)"
 
   @moduledoc """
-  Generates an always-on chat widget that connects this application's
-  logged-in users to their CodeMySpec operator inbox.
+  Generates an always-on support widget that connects this application's
+  logged-in users to CodeMySpec. One widget, two tabs:
+
+    * **Chat** — live conversation with a CodeMySpec operator.
+    * **Feedback** — report an issue (title/severity/description) with an
+      optional screenshot.
 
       mix client_utils.gen.chat_widget
 
   The widget is a sticky nested LiveView. Per logged-in user, the app's
   **server** opens a Slipstream connection to CodeMySpec authenticated by the
-  project deploy key — the key never reaches the browser. Messages relay
-  between the user's widget and the operator over PubSub.
+  project deploy key — the key never reaches the browser. Chat messages and
+  feedback submissions both ride that one connection; nothing uses OAuth.
 
   ## What it writes
 
     * `lib/<app>/code_my_spec/widget_client.ex` — per-user Slipstream client
+      (relays chat messages and `submit_feedback`)
     * `lib/<app>/code_my_spec/widget.ex` — registry/supervisor interface
     * `lib/<app>_web/live/chat_widget_live.ex` — the sticky nested LiveView
+      (chat + feedback tabs)
 
   It then prints the dep, supervision, layout, and config you must add (it
   does not edit those — generators leave wiring to you).
@@ -99,7 +105,14 @@ defmodule Mix.Tasks.ClientUtils.Gen.ChatWidget do
 
         config :#{otp_app}, :deploy_key, System.get_env("DEPLOY_KEY")
 
-    5. Run `mix deps.get`, then restart the server.
+    5. (Optional) Enable feedback screenshots — the capture button dynamically
+       imports html-to-image:
+
+        cd assets && npm install html-to-image --prefix .
+
+       Without it, feedback still submits; only the screenshot capture is a no-op.
+
+    6. Run `mix deps.get`, then restart the server.
     """
   end
 end

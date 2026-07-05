@@ -39,6 +39,9 @@ defmodule <%= @base %>.CodeMySpec.Widget do
   def send_message(user_id, body), do: cast(user_id, {:send_message, body})
   def load_older(user_id, before), do: cast(user_id, {:load_older, before})
 
+  @doc "Submit feedback (title/description/severity + optional screenshot) to CodeMySpec."
+  def submit_feedback(user_id, payload), do: cast(user_id, {:submit_feedback, payload})
+
   defp cast(user_id, message) do
     GenServer.cast(via(user_id), message)
   catch
