@@ -1,7 +1,15 @@
 defmodule Mix.Tasks.ClientUtils.Gen.ChatWidget do
-  @shortdoc "Generate the CodeMySpec support widget (chat + feedback, server-side Slipstream)"
+  @shortdoc "DEPRECATED — moved to cms_gen.support_widget in code_my_spec_generators"
 
   @moduledoc """
+  > #### Deprecated {: .warning}
+  >
+  > The support widget has been consolidated into the `code_my_spec_generators`
+  > package as `mix cms_gen.support_widget`, which is the canonical, maintained
+  > version (chat + "Report a problem", wired to the CodeMySpec issue queue).
+  > This generator is kept only for existing installs; new apps should use
+  > `cms_gen.support_widget`.
+
   Generates an always-on support widget that connects this application's
   logged-in users to CodeMySpec. One widget, two tabs:
 
