@@ -18,6 +18,16 @@ defmodule Mix.Tasks.AgentTest do
 
   use Mix.Task
 
+  # Without this the task starts in :dev and Mix refuses to run it at all.
+  # That surfaces to the CodeMySpec harness as "exunit: failed" with no failing
+  # test attached — a red quality gate pointing at nothing, in a project where
+  # the tests are fine.
+  #
+  # Declared here rather than left to each consuming app's `preferred_envs`,
+  # because the task ships from here and every consumer would otherwise have to
+  # know to add it.
+  @preferred_cli_env :test
+
   require Logger
 
   alias ClientUtils.TestFormatter.TestCache
