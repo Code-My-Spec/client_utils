@@ -52,7 +52,10 @@ defmodule ClientUtils.CloudflareTunnel do
     * `:mode` — `:quick` (default) or `:named`
     * `:name` — GenServer name registration (default: `__MODULE__`)
     * `:additional_hostnames` — list of extra hostnames to route through the tunnel
-      (named mode only). Each hostname is added as an ingress rule pointing to
+      (named mode only). A bare hostname routes to the same origin as `:hostname`;
+      a `{hostname, service}` tuple routes to `service` instead, for a second
+      listener on the same machine. Each hostname is added as an ingress rule
+      pointing to
       the same `:origin_url`. Useful for white-label custom domains in dev.
   """
 
@@ -222,6 +225,21 @@ defmodule ClientUtils.CloudflareTunnel do
     end
   end
 
+  # A hostname alone routes to the same origin as the main one. A
+  # `{hostname, service}` pair routes somewhere else, which is what a second
+  # listener on the same machine needs — one app cannot always serve every
+  # hostname the tunnel carries, and forcing it to is how you end up with a
+  # path collision that only shows up over WebSocket.
+  defp ingress_rule({host, service}, _default),
+    do: "  - hostname: #{quoted(host)}\n    service: #{service}"
+
+  defp ingress_rule(host, default), do: "  - hostname: #{quoted(host)}\n    service: #{default}"
+
+  # Quoted, because a wildcard hostname starts with `*` and an unquoted `*` in
+  # YAML is an alias indicator — cloudflared refuses to parse the whole file,
+  # which takes down every other route with it rather than just the new one.
+  defp quoted(host), do: ~s("#{host}")
+
   defp write_config(opts) do
     base_dir = Keyword.get(opts, :base_dir, Path.join(File.cwd!(), "tmp/cloudflared"))
     File.mkdir_p!(base_dir)
@@ -231,7 +249,7 @@ defmodule ClientUtils.CloudflareTunnel do
 
     extra_ingress =
       additional
-      |> Enum.map(fn host -> "  - hostname: #{host}\n    service: #{opts[:origin_url]}" end)
+      |> Enum.map(&ingress_rule(&1, opts[:origin_url]))
       |> Enum.join("\n")
 
     extra_block = if extra_ingress == "", do: "", else: "\n" <> extra_ingress
