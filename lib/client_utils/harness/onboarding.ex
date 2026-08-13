@@ -56,6 +56,13 @@ defmodule ClientUtils.Harness.Onboarding do
   Each command names its own database for the same reason. The migration guard
   printed `MIX_ENV=test mix ecto.migrate` while checking a partition that command
   never touches; an agent followed it correctly and nothing changed.
+
+  The name has **no separator** before the partition, because that is what
+  `config/test.exs` composes: `"<app>_test<partition>"`. An earlier version wrote
+  `_test_`, so the printed name and the database its own command created differed
+  by one character — the same defect as the hardcoded prefix before it, surviving
+  the fix for that one because the output was only ever compared to itself
+  (c4a2acae).
   """
   @spec databases(String.t(), atom() | String.t()) :: [
           %{name: String.t(), partition: String.t(), create: String.t(), migrate: String.t()}
@@ -63,7 +70,7 @@ defmodule ClientUtils.Harness.Onboarding do
   def databases(partition, app) do
     Enum.map([partition, partition <> "s"], fn part ->
       %{
-        name: "#{app}_test_#{part}",
+        name: "#{app}_test#{part}",
         partition: part,
         create: "MIX_TEST_PARTITION=#{part} MIX_ENV=test mix ecto.create",
         migrate: "MIX_TEST_PARTITION=#{part} MIX_ENV=test mix ecto.migrate"
