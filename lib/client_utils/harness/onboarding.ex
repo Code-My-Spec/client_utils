@@ -44,6 +44,53 @@ defmodule ClientUtils.Harness.Onboarding do
   end
 
   @doc """
+  The partition a consumer should use for the copy at `root`.
+
+  **Reads before it derives.** If onboarding recorded a partition, that is the
+  answer; `partition_name/1` is the fallback for a copy nobody has onboarded.
+
+  This is the function the story turns on, and it was missing. Onboarding recorded
+  a value and nothing read it: `CmsHarness.TestDatabase` digested the cwd and
+  `partition_name/1` digested it identically, in two repositories, and the analyzer
+  set `MIX_TEST_PARTITION` from its own copy. The two agreed because two
+  implementations of one algorithm agreed — a coincidence maintained by hand, and a
+  stricter form of the defect this replaces. Recording a value nobody reads had
+  turned two derivations into three (acaf8035).
+
+  Every check written before this one compared the producer to itself: that the
+  report matched the settings file, that the printed name matched the printed
+  command. All true, and all of it would have passed with no consumer reading a
+  word of it.
+
+  Pass `read:` to resolve through something other than the filesystem — a 1-arity
+  function taking a path relative to `root`. CodeMySpec passes one over its
+  `Environments` abstraction so the analyzer and a spec resolve the same way.
+  """
+  @spec resolve_partition(String.t(), keyword()) :: String.t()
+  def resolve_partition(root, opts \\ []) do
+    read = Keyword.get(opts, :read, &default_read(root, &1))
+
+    case recorded_partition(read) do
+      nil -> partition_name(root)
+      partition -> partition
+    end
+  end
+
+  defp default_read(root, path) do
+    File.read(Path.join(root, path))
+  end
+
+  defp recorded_partition(read) do
+    with {:ok, contents} <- read.(settings_path()),
+         {:ok, %{"env" => %{"MIX_TEST_PARTITION" => partition}}} <- Jason.decode(contents),
+         true <- is_binary(partition) and partition != "" do
+      partition
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   Every database this working copy uses, each with the commands that create and
   migrate **it**.
 
