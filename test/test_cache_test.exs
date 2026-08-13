@@ -143,6 +143,38 @@ defmodule ClientUtils.TestFormatter.TestCacheTest do
     end
   end
 
+  describe "store_events/2 run cap (max_test_runs)" do
+    setup do
+      on_exit(fn -> Application.delete_env(:client_utils, :max_test_runs) end)
+      :ok
+    end
+
+    test "trims to the configured cap, retaining only the newest runs" do
+      Application.put_env(:client_utils, :max_test_runs, 3)
+
+      for i <- 1..5 do
+        file = "/path/to/run_#{i}.exs"
+        TestCache.store_events([{:test_finished, %{tags: %{file: file}}}])
+      end
+
+      {:ok, contents} = File.read(TestCache.events_file())
+      {:ok, data} = Jason.decode(contents)
+
+      assert length(data["runs"]) == 3
+
+      long_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      # oldest two runs were pruned
+      assert TestCache.file_tested_after?("/path/to/run_1.exs", long_ago) == false
+      assert TestCache.file_tested_after?("/path/to/run_2.exs", long_ago) == false
+
+      # newest three runs were kept
+      assert TestCache.file_tested_after?("/path/to/run_3.exs", long_ago) == true
+      assert TestCache.file_tested_after?("/path/to/run_4.exs", long_ago) == true
+      assert TestCache.file_tested_after?("/path/to/run_5.exs", long_ago) == true
+    end
+  end
+
   describe "clear/0" do
     test "removes all cached events" do
       file = "/path/to/test.exs"

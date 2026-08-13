@@ -13,6 +13,14 @@ defmodule ClientUtils.TestFormatter.TestCache do
   @default_base_dir ".code_my_spec/internal"
   @default_events_filename "agent_test_events.json"
 
+  # Caps how many runs are retained in the events file. Without a cap this file
+  # is read-parsed-encoded-rewritten in full on every test run, so it grows
+  # without bound (observed at 16+ MB in long-lived projects). 100 runs is
+  # comfortably more than the module's own 60-second cache-validity window
+  # (see Mix.Tasks.AgentTest) while keeping the file small. Override via
+  # `config :client_utils, :max_test_runs, N`.
+  @max_runs 100
+
   @doc """
   Returns the events file path.
   Uses the configured :agent_test_dir, or can be overridden via AGENT_TEST_EVENTS_FILE environment variable.
@@ -61,7 +69,11 @@ defmodule ClientUtils.TestFormatter.TestCache do
         |> Enum.filter(fn %{"file" => file} -> file != nil end)
     }
 
-    updated_data = %{data | "runs" => data["runs"] ++ [new_run]}
+    max_runs = Application.get_env(:client_utils, :max_test_runs, @max_runs)
+    # Runs are appended to the end, so the most recent run is last; keep the
+    # tail so the cap always drops the oldest runs, never the newest.
+    updated_runs = Enum.take(data["runs"] ++ [new_run], -max_runs)
+    updated_data = %{data | "runs" => updated_runs}
     write_events_file(updated_data)
 
     :ok
@@ -201,7 +213,7 @@ defmodule ClientUtils.TestFormatter.TestCache do
     dir = Path.dirname(file)
 
     File.mkdir_p!(dir)
-    File.write!(file, Jason.encode!(data, pretty: true))
+    File.write!(file, Jason.encode!(data))
   end
 
   defp ensure_structure(data) do

@@ -30,3 +30,6 @@ client_utils*.tar
 .code_my_spec/
 code_my_spec_claude_code_extension/
 repomix-output.xml
+
+# Written by the agent_test suite via AGENT_TEST_EVENTS_FILE, not source.
+fixtures/shared_test_events.json
