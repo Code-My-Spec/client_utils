@@ -44,35 +44,56 @@ defmodule ClientUtils.Harness.Onboarding do
   end
 
   @doc """
-  The partition a consumer should use for the copy at `root`.
+  The partition recorded for the copy at `root`.
 
-  **Reads before it derives.** If onboarding recorded a partition, that is the
-  answer; `partition_name/1` is the fallback for a copy nobody has onboarded.
+  **Read, never derived.** There is one path: onboarding assigns the partition and
+  writes it down, and everything afterwards reads that. A copy with nothing
+  recorded is not onboarded, and this says so rather than inventing a value.
 
-  This is the function the story turns on, and it was missing. Onboarding recorded
-  a value and nothing read it: `CmsHarness.TestDatabase` digested the cwd and
-  `partition_name/1` digested it identically, in two repositories, and the analyzer
-  set `MIX_TEST_PARTITION` from its own copy. The two agreed because two
-  implementations of one algorithm agreed — a coincidence maintained by hand, and a
-  stricter form of the defect this replaces. Recording a value nobody reads had
-  turned two derivations into three (acaf8035).
+  The fallback that used to live here was the second mechanism. Onboarding
+  recorded a partition and nothing read it: `CmsHarness.TestDatabase` digested the
+  cwd, `partition_name/1` digested it identically, and the analyzer set
+  `MIX_TEST_PARTITION` from its own copy. They agreed because one algorithm had
+  been written twice — a coincidence maintained by hand rather than a shared
+  value, and recording a value nobody reads turned two derivations into three
+  (acaf8035). Leaving a derive-on-miss path in the resolver would have kept both
+  alive, silently, for exactly the copies nobody had onboarded.
 
-  Every check written before this one compared the producer to itself: that the
-  report matched the settings file, that the printed name matched the printed
-  command. All true, and all of it would have passed with no consumer reading a
-  word of it.
+  `partition_name/1` still exists, and is only for *assigning* a name during
+  onboarding. Nothing resolves through it.
 
   Pass `read:` to resolve through something other than the filesystem — a 1-arity
-  function taking a path relative to `root`. CodeMySpec passes one over its
-  `Environments` abstraction so the analyzer and a spec resolve the same way.
+  function taking a path relative to `root`.
   """
-  @spec resolve_partition(String.t(), keyword()) :: String.t()
+  @spec resolve_partition(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, :not_onboarded}
   def resolve_partition(root, opts \\ []) do
     read = Keyword.get(opts, :read, &default_read(root, &1))
 
     case recorded_partition(read) do
-      nil -> partition_name(root)
-      partition -> partition
+      nil -> {:error, :not_onboarded}
+      partition -> {:ok, partition}
+    end
+  end
+
+  @doc """
+  The recorded partition, or a raise naming what to run.
+
+  For callers that cannot proceed without one. The message is the remedy, because
+  a refusal whose fix is not stated is the failure this story is about.
+  """
+  @spec resolve_partition!(String.t(), keyword()) :: String.t()
+  def resolve_partition!(root, opts \\ []) do
+    case resolve_partition(root, opts) do
+      {:ok, partition} ->
+        partition
+
+      {:error, :not_onboarded} ->
+        raise """
+        #{root} has no recorded test partition, so it has not been onboarded.
+
+        Run: mix harness.onboard
+        """
     end
   end
 
