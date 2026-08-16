@@ -115,11 +115,29 @@ defmodule ClientUtils.Harness.Onboarding do
   Every database this working copy uses, each with the commands that create and
   migrate **it**.
 
-  Two, not one. An analyzer and an interactive session deliberately use different
-  databases — running a suite and an analyzer concurrently against one produced 13
-  orphaned rows and 17 phantom failures — so reporting a single database hides the
-  second, and hiding the second is how an agent migrates one and stays blocked on
-  the other for three days.
+  Three, not one. An analyzer and an interactive session deliberately use
+  different databases — running a suite and an analyzer concurrently against one
+  produced 13 orphaned rows and 17 phantom failures — so reporting a single
+  database hides the others, and hiding one is how an agent migrates the rest and
+  stays blocked on it for three days.
+
+    <partition>    the interactive session's `mix test`
+    <partition>s   the analyzer's spex run
+    <partition>a   the analyzer's exunit run
+
+  The third is newer than the other two and closes the last pair that still
+  shared. `mix harness.onboard` records `MIX_TEST_PARTITION` in
+  `.claude/settings.local.json`'s `env` block so `resolve_partition!/2` can read
+  it back — and Claude Code exports that block into the agent's session, so the
+  agent's own `mix test` and the analyzer's exunit run resolved to the same
+  name. Two full suites in one database, live every time someone tested during a
+  sweep, failing in the direction of "your branch broke these tests".
+
+  This list is what tells anyone which databases to create, and nothing creates
+  them on its own: the harness names databases and does not manage them, after a
+  version that shelled out to `mix` with `MIX_ENV` scrubbed and emptied dev three
+  times on 2026-08-13. So a partition missing from here is a database nobody is
+  told to create, and the analyzer meets it as "database does not exist".
 
   Each command names its own database for the same reason. The migration guard
   printed `MIX_ENV=test mix ecto.migrate` while checking a partition that command
@@ -136,7 +154,7 @@ defmodule ClientUtils.Harness.Onboarding do
           %{name: String.t(), partition: String.t(), create: String.t(), migrate: String.t()}
         ]
   def databases(partition, app) do
-    Enum.map([partition, partition <> "s"], fn part ->
+    Enum.map([partition, partition <> "s", partition <> "a"], fn part ->
       %{
         name: "#{app}_test#{part}",
         partition: part,
