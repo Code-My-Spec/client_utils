@@ -266,13 +266,63 @@ defmodule ClientUtils.Harness.Onboarding do
   Absence has to report itself. A missing thing that produces no error where it is
   missing surfaces somewhere else wearing another failure's costume, and stopping
   that is what onboarding is for.
+
+  So this asserts the keys `settings/3` writes rather than that its file exists.
+  Existence was the whole test, and it answered `onboarded:` for a copy that was
+  not — a run that refused partway leaves the file behind, written by an earlier
+  attempt, holding neither `CMS_HARNESS_ID` nor an id on `ANTHROPIC_BASE_URL`.
+  The observed output printed `onboarded:` and `hooks: skipped` two lines apart,
+  and the copy then addressed the *parent* checkout's harness for three days
+  while its own went unscanned — requirements, hooks and MCP all answering
+  confidently about a working copy nobody was editing (`c79ee092`).
+
+  `missing` names which keys are absent, because "not onboarded" without a
+  reason sends the reader back to the file to work out which half failed — and
+  a half-onboarded copy is the case where that matters most.
+
+  The remedy stays `mix harness.onboard`: the write is a merge, so re-running it
+  repairs a partial copy without disturbing anything the operator put there.
   """
-  @spec check(String.t(), keyword()) :: %{onboarded: boolean(), remedy: String.t()}
+  @spec check(String.t(), keyword()) :: %{
+          onboarded: boolean(),
+          missing: [String.t()],
+          remedy: String.t()
+        }
   def check(root, opts \\ []) do
     io = Keyword.get(opts, :io, @default_io)
+    missing = missing_settings(io, root)
 
-    %{onboarded: io.exists?(root, settings_path()), remedy: "mix harness.onboard"}
+    %{onboarded: missing == [], missing: missing, remedy: "mix harness.onboard"}
   end
+
+  # An absent file is every key missing rather than a special case: the caller
+  # asks the same question either way, and "onboarded: false, missing: all three"
+  # reads correctly for a copy that has never been onboarded.
+  @required_env ["CMS_HARNESS_ID", "MIX_TEST_PARTITION", "ANTHROPIC_BASE_URL"]
+
+  defp missing_settings(io, root) do
+    env =
+      case read_settings(io, root) do
+        {:ok, settings} -> Map.get(settings, "env", %{})
+        _ -> %{}
+      end
+
+    Enum.filter(@required_env, &blank_or_invalid?(&1, Map.get(env, &1)))
+  end
+
+  # `ANTHROPIC_BASE_URL` is checked for an id rather than for presence. The
+  # measured failure had it set to `http://localhost:4004/api/harnesses/` — the
+  # prefix with nothing after it — which is not a route to anything and is
+  # exactly what a run that refused before learning its harness id leaves.
+  defp blank_or_invalid?("ANTHROPIC_BASE_URL", value) when is_binary(value) do
+    case String.split(value, "/api/harnesses/") do
+      [_prefix, id] -> String.trim(id) == ""
+      _ -> true
+    end
+  end
+
+  defp blank_or_invalid?(_key, value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_or_invalid?(_key, _value), do: true
 
   # Merged, never stamped. The operator may have written in this file, and an
   # onboarding that overwrites their edits cannot safely be re-run — which means

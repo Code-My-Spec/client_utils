@@ -64,6 +64,21 @@ defmodule Mix.Tasks.Harness.Onboard do
     status
   end
 
+  # Names the keys, because "not onboarded" alone sends the reader back to the
+  # file to work out which half failed — and the case that matters most is the
+  # half-onboarded copy, where the file is present and some of the keys are
+  # right. That state used to print `onboarded:`.
+  defp report_check(
+         %{onboarded: false, missing: [_ | _] = missing, remedy: remedy} = status,
+         root
+       ) do
+    Mix.shell().info(
+      "not onboarded: #{root}\n  missing: #{Enum.join(missing, ", ")}\nrun: #{remedy}"
+    )
+
+    status
+  end
+
   defp report_check(%{onboarded: false, remedy: remedy} = status, root) do
     Mix.shell().info("not onboarded: #{root}\nrun: #{remedy}")
     status
