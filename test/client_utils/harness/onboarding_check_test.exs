@@ -143,10 +143,10 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
              Enum.sort([
                "CMS_HARNESS_ID",
                "MIX_TEST_PARTITION",
-               "ANTHROPIC_BASE_URL",
                "HARNESS_CONFIG"
              ]),
-           "a copy that was never onboarded is the ordinary case, not a special one"
+           "a copy that was never onboarded is the ordinary case, not a special one — " <>
+             "ANTHROPIC_BASE_URL is opt-in and not part of this list, see relay_model_turns?"
   end
 
   test "settings addressed but hooks config absent is named too" do

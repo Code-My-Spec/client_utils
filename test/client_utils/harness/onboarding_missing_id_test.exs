@@ -73,8 +73,11 @@ defmodule ClientUtils.Harness.Onboarding.MissingIdTest do
     onboard()
 
     assert %{onboarded: false, missing: missing} = Onboarding.check(@root, io: FakeIO)
-    assert "ANTHROPIC_BASE_URL" in missing
     assert "CMS_HARNESS_ID" in missing
+
+    refute "ANTHROPIC_BASE_URL" in missing,
+           "opt-in and default off — see relay_model_turns? — so its absence is not what " <>
+             "makes this copy unonboarded"
   end
 
   test "no id still records the partition — that part never needed a server" do
@@ -83,8 +86,22 @@ defmodule ClientUtils.Harness.Onboarding.MissingIdTest do
     assert written_env()["MIX_TEST_PARTITION"] == Onboarding.partition_name(@root)
   end
 
-  test "a real id writes a real address" do
+  test "a real id addresses MCP but does not relay model turns by default" do
     onboard(harness_id: @harness)
+
+    env = written_env()
+
+    assert env["CMS_HARNESS_ID"] == @harness
+
+    refute Map.has_key?(env, "ANTHROPIC_BASE_URL"),
+           "the harness's Anthropic proxy only forwards /v1/messages — routing an " <>
+             "interactive session's model turns through it silently breaks anything " <>
+             "else the Claude Code client needs (/remote-control, measured), so this " <>
+             "has to be asked for with relay_model_turns: true, not assumed from an id"
+  end
+
+  test "relay_model_turns: true writes the model-turn address too" do
+    onboard(harness_id: @harness, relay_model_turns: true)
 
     env = written_env()
 
@@ -92,7 +109,7 @@ defmodule ClientUtils.Harness.Onboarding.MissingIdTest do
     assert env["ANTHROPIC_BASE_URL"] == Onboarding.anthropic_url("http://localhost:4004", @harness)
   end
 
-  test "re-running with no id does not erase an address a prior run wrote" do
+  test "re-running with no id does not erase an id a prior run wrote" do
     onboard(harness_id: @harness)
     onboard()
 
@@ -101,8 +118,16 @@ defmodule ClientUtils.Harness.Onboarding.MissingIdTest do
     assert env["CMS_HARNESS_ID"] == @harness,
            "a bare re-run — someone re-running the printed remedy out of habit, or a CI step " <>
              "that always calls this — must not blank out an id a real run already recorded"
+  end
 
-    assert env["ANTHROPIC_BASE_URL"] == Onboarding.anthropic_url("http://localhost:4004", @harness)
+  test "re-running with no id does not erase a model-turn address a prior run opted into" do
+    onboard(harness_id: @harness, relay_model_turns: true)
+    onboard()
+
+    env = written_env()
+
+    assert env["ANTHROPIC_BASE_URL"] == Onboarding.anthropic_url("http://localhost:4004", @harness),
+           "a bare re-run must not silently revoke an address a prior, opted-in run wrote"
   end
 
   test "the printed report never claims a copy is addressed when it is not" do

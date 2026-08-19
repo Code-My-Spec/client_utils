@@ -193,10 +193,22 @@ defmodule ClientUtils.Harness.Onboarding do
   URL carries the harness id, and `settings.json` is tracked — so writing it there
   stages one machine's identity for commit and the next clone inherits it, looking
   onboarded while talking to a harness that is not its own.
+
+  `ANTHROPIC_BASE_URL` is opt-in (`relay_model_turns?`, default `false`) and
+  `CMS_HARNESS_ID` is not. Every model turn an agent makes is Claude Code's own
+  Anthropic client, posted directly, and the harness proxy in front of it only
+  understands `/v1/messages` — no other route it forwards, `/remote-control`
+  included, so setting this address on an interactive session silently makes
+  those unavailable with no error anywhere. `CMS_HARNESS_ID` carries none of
+  that risk: it only ever reaches MCP, interpolated into a header, so it stays
+  on whenever there is an id to give.
   """
-  @spec settings(String.t() | nil, String.t(), String.t()) :: map()
-  def settings(harness_id, partition, base_url) do
-    %{"env" => address(harness_id, base_url) |> Map.put("MIX_TEST_PARTITION", partition)}
+  @spec settings(String.t() | nil, String.t(), String.t(), boolean()) :: map()
+  def settings(harness_id, partition, base_url, relay_model_turns? \\ false) do
+    %{
+      "env" =>
+        address(harness_id, base_url, relay_model_turns?) |> Map.put("MIX_TEST_PARTITION", partition)
+    }
   end
 
   # No id, no address. `"#{nil}"` renders as `""`, not the atom's name — so
@@ -205,11 +217,17 @@ defmodule ClientUtils.Harness.Onboarding do
   # `blank_or_invalid?/2` below exists to catch, written silently by a run
   # that reported full success. Both keys are absent instead, so a copy that
   # cannot yet be addressed does not look addressed.
-  defp address(nil, _base_url), do: %{}
+  defp address(nil, _base_url, _relay?), do: %{}
 
-  defp address(harness_id, base_url) when is_binary(harness_id) do
-    %{"ANTHROPIC_BASE_URL" => anthropic_url(base_url, harness_id), "CMS_HARNESS_ID" => harness_id}
+  defp address(harness_id, base_url, relay?) when is_binary(harness_id) do
+    %{"CMS_HARNESS_ID" => harness_id}
+    |> maybe_relay_model_turns(harness_id, base_url, relay?)
   end
+
+  defp maybe_relay_model_turns(env, harness_id, base_url, true),
+    do: Map.put(env, "ANTHROPIC_BASE_URL", anthropic_url(base_url, harness_id))
+
+  defp maybe_relay_model_turns(env, _harness_id, _base_url, false), do: env
 
   @doc "The file settings belong in. Untracked, deliberately — see `settings/2`."
   @spec settings_path() :: String.t()
@@ -269,9 +287,12 @@ defmodule ClientUtils.Harness.Onboarding do
     harness_id = Keyword.get(opts, :harness_id)
     app = Keyword.fetch!(opts, :app)
     base_url = Keyword.get(opts, :base_url, "http://localhost:4004")
+    relay_model_turns? = Keyword.get(opts, :relay_model_turns, false)
     partition = partition_name(root)
 
-    {settings, effective_id} = write_settings(io, root, harness_id, partition, base_url)
+    {settings, effective_id} =
+      write_settings(io, root, harness_id, partition, base_url, relay_model_turns?)
+
     hooks = write_harness_config(io, root, effective_id)
 
     %{
@@ -322,9 +343,16 @@ defmodule ClientUtils.Harness.Onboarding do
   end
 
   # An absent file is every key missing rather than a special case: the caller
-  # asks the same question either way, and "onboarded: false, missing: all three"
-  # reads correctly for a copy that has never been onboarded.
-  @required_env ["CMS_HARNESS_ID", "MIX_TEST_PARTITION", "ANTHROPIC_BASE_URL"]
+  # asks the same question either way, and "onboarded: false, missing: all
+  # required keys" reads correctly for a copy that has never been onboarded.
+  #
+  # `ANTHROPIC_BASE_URL` is not in this list. It is opt-in (`relay_model_turns?`
+  # on `onboard/2`) precisely because most working copies should not carry it —
+  # see `settings/4`'s doc — so a copy that never asked for it is not
+  # half-onboarded for lacking it. If it *is* present, `missing_settings/2`
+  # below still checks it is not the dangling-prefix shape a refused mint
+  # leaves; presence with a broken value is still reported.
+  @required_env ["CMS_HARNESS_ID", "MIX_TEST_PARTITION"]
 
   defp missing_settings(io, root) do
     env =
@@ -334,11 +362,19 @@ defmodule ClientUtils.Harness.Onboarding do
       end
 
     env_missing = Enum.filter(@required_env, &blank_or_invalid?(&1, Map.get(env, &1)))
+    env_missing = env_missing ++ invalid_if_present(env, "ANTHROPIC_BASE_URL")
 
     if blank_or_invalid?("HARNESS_CONFIG", read_harness_config_id(io, root)) do
       env_missing ++ ["HARNESS_CONFIG"]
     else
       env_missing
+    end
+  end
+
+  defp invalid_if_present(env, key) do
+    case Map.get(env, key) do
+      nil -> []
+      value -> if blank_or_invalid?(key, value), do: [key], else: []
     end
   end
 
@@ -372,11 +408,14 @@ defmodule ClientUtils.Harness.Onboarding do
   # onboarding that overwrites their edits cannot safely be re-run — which means
   # anyone unsure whether a copy is onboarded has to reason about it instead of
   # simply running it again.
-  defp write_settings(io, root, harness_id, partition, base_url) do
+  defp write_settings(io, root, harness_id, partition, base_url, relay_model_turns?) do
     case read_settings(io, root) do
       {:ok, existing} ->
         merged_env =
-          merge_env(Map.get(existing, "env", %{}), settings(harness_id, partition, base_url)["env"])
+          merge_env(
+            Map.get(existing, "env", %{}),
+            settings(harness_id, partition, base_url, relay_model_turns?)["env"]
+          )
 
         merged = Map.put(existing, "env", merged_env)
 

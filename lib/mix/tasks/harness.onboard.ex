@@ -4,12 +4,22 @@ defmodule Mix.Tasks.Harness.Onboard do
   @moduledoc """
   Take the working copy this runs in from checkout to ready.
 
-      mix harness.onboard [PATH] [--check]
+      mix harness.onboard [PATH] [--check] [--relay-model-turns]
 
-  Writes the settings an agent session needs — the Anthropic base URL it relays
-  model turns through, and the test partition its databases are named after —
+  Writes the settings an agent session needs — the harness id its MCP mount
+  addresses with, and the test partition its databases are named after —
   sets the git config the copy needs, and then names the databases it still wants
   without creating any of them.
+
+  ## `--relay-model-turns` is opt-in, and defaults off
+
+  Passing `--relay-model-turns` also writes `ANTHROPIC_BASE_URL`, routing every
+  model turn through the harness's Anthropic proxy instead of straight to
+  Anthropic. That proxy only understands `/v1/messages` — no other route it
+  forwards — so setting this on an interactive session silently makes anything
+  else the Claude Code client needs unavailable, `/remote-control` included,
+  with no error anywhere to say why. Leave it off unless something specific
+  reads the recorded turns (an observability UI, a sprite).
 
   ## Why this lives here
 
@@ -36,7 +46,11 @@ defmodule Mix.Tasks.Harness.Onboard do
 
   @impl Mix.Task
   def run(args) do
-    {opts, rest, _invalid} = OptionParser.parse(args, strict: [check: :boolean, id: :string])
+    {opts, rest, _invalid} =
+      OptionParser.parse(args,
+        strict: [check: :boolean, id: :string, relay_model_turns: :boolean]
+      )
+
     root = rest |> List.first() |> root_or_cwd()
 
     case Keyword.get(opts, :check, false) do
@@ -49,7 +63,11 @@ defmodule Mix.Tasks.Harness.Onboard do
   # `code_my_spec_test_*` inside an application called something else — a printed
   # command that creates a different database than the one it names.
   defp onboard_opts(opts) do
-    [harness_id: Keyword.get(opts, :id), app: Mix.Project.config()[:app]]
+    [
+      harness_id: Keyword.get(opts, :id),
+      app: Mix.Project.config()[:app],
+      relay_model_turns: Keyword.get(opts, :relay_model_turns, false)
+    ]
   end
 
   defp root_or_cwd(nil), do: File.cwd!()
