@@ -91,6 +91,7 @@ defmodule Mix.Tasks.Harness.Onboard do
       partition:  #{report.partition}
       settings:   #{describe(report.settings)}
       address:    #{describe_address(report.harness_id)}
+      hooks:      #{describe_hooks(report.hooks)}
       submodules: #{if report.git.submodule_recurse, do: "recursing", else: "not configured"}
     """)
 
@@ -107,6 +108,10 @@ defmodule Mix.Tasks.Harness.Onboard do
 
   defp describe_address(nil), do: "not addressed — no harness id"
   defp describe_address(id), do: "addressed (#{id})"
+
+  defp describe_hooks({:ok, :skipped}), do: "not addressed — no harness id"
+  defp describe_hooks({:ok, path}), do: path
+  defp describe_hooks({:error, reason}), do: "not written — #{inspect(reason)}"
 
   # Loud, not just absent from the summary above. This is the exact half-onboarded
   # state a silent success used to leave behind — the copy printed "onboarded:"

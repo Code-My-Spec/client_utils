@@ -63,6 +63,13 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
     )
   end
 
+  defp put_hooks_config(harness_id) do
+    Process.put(
+      {:settings, Onboarding.harness_config_path()},
+      Jason.encode!(%{"harness_id" => harness_id, "project_id" => nil, "root" => @root})
+    )
+  end
+
   defp check, do: Onboarding.check(@root, io: FakeIO)
 
   defp complete_env do
@@ -75,6 +82,7 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
 
   test "a copy with every key is onboarded" do
     put_settings(complete_env())
+    put_hooks_config(@harness)
 
     assert %{onboarded: true, missing: []} = check()
   end
@@ -101,6 +109,8 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
       | "ANTHROPIC_BASE_URL" => "http://localhost:4004/api/harnesses/"
     })
 
+    put_hooks_config(@harness)
+
     status = check()
 
     refute status.onboarded,
@@ -112,12 +122,14 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
 
   test "an absent harness id is named" do
     put_settings(Map.delete(complete_env(), "CMS_HARNESS_ID"))
+    put_hooks_config(@harness)
 
     assert %{onboarded: false, missing: ["CMS_HARNESS_ID"]} = check()
   end
 
   test "a blank value counts as missing" do
     put_settings(%{complete_env() | "CMS_HARNESS_ID" => "   "})
+    put_hooks_config(@harness)
 
     assert %{onboarded: false, missing: ["CMS_HARNESS_ID"]} = check()
   end
@@ -128,8 +140,19 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
     refute status.onboarded
 
     assert Enum.sort(status.missing) ==
-             Enum.sort(["CMS_HARNESS_ID", "MIX_TEST_PARTITION", "ANTHROPIC_BASE_URL"]),
+             Enum.sort([
+               "CMS_HARNESS_ID",
+               "MIX_TEST_PARTITION",
+               "ANTHROPIC_BASE_URL",
+               "HARNESS_CONFIG"
+             ]),
            "a copy that was never onboarded is the ordinary case, not a special one"
+  end
+
+  test "settings addressed but hooks config absent is named too" do
+    put_settings(complete_env())
+
+    assert %{onboarded: false, missing: ["HARNESS_CONFIG"]} = check()
   end
 
   test "the remedy is still the command that repairs a partial copy" do

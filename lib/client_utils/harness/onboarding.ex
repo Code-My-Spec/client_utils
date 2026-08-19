@@ -216,6 +216,22 @@ defmodule ClientUtils.Harness.Onboarding do
   def settings_path, do: ".claude/settings.local.json"
 
   @doc """
+  The file hooks resolve identity from.
+
+  `CMS_HARNESS_ID` in `.claude/settings.local.json`'s `env` block only reaches
+  **MCP** — Claude Code interpolates `${CMS_HARNESS_ID}` into the request header
+  itself. Hooks run through a separate Go relay that never sees that
+  interpolation and has no environment variable to fall back to; it resolves a
+  working copy's identity by walking up from the hook payload's own `cwd`
+  looking for this file's `harness_id` key. A copy addressed only in
+  `settings.local.json` has working MCP and silently unaddressed hooks — the
+  relay omits the header with no error, and the server-side refusal is the
+  only place that ever said so.
+  """
+  @spec harness_config_path() :: String.t()
+  def harness_config_path, do: ".cms_harness.json"
+
+  @doc """
   Git settings a working copy needs.
 
   `submodule.recurse` because a submodule sits in detached HEAD by design and so
@@ -256,12 +272,14 @@ defmodule ClientUtils.Harness.Onboarding do
     partition = partition_name(root)
 
     {settings, effective_id} = write_settings(io, root, harness_id, partition, base_url)
+    hooks = write_harness_config(io, root, effective_id)
 
     %{
       root: root,
       harness_id: effective_id,
       partition: partition,
       settings: settings,
+      hooks: hooks,
       databases: databases(partition, app),
       git: %{submodule_recurse: configure_git(io, root)},
       issued_ddl: false
@@ -315,7 +333,25 @@ defmodule ClientUtils.Harness.Onboarding do
         _ -> %{}
       end
 
-    Enum.filter(@required_env, &blank_or_invalid?(&1, Map.get(env, &1)))
+    env_missing = Enum.filter(@required_env, &blank_or_invalid?(&1, Map.get(env, &1)))
+
+    if blank_or_invalid?("HARNESS_CONFIG", read_harness_config_id(io, root)) do
+      env_missing ++ ["HARNESS_CONFIG"]
+    else
+      env_missing
+    end
+  end
+
+  # Same file `write_harness_config/3` writes, read back the same way the
+  # relay reads it: only `harness_id` matters, and a blank one is absence, not
+  # presence — see that function's comment for why a run never writes one.
+  defp read_harness_config_id(io, root) do
+    with {:ok, contents} <- io.read(root, harness_config_path()),
+         {:ok, %{"harness_id" => id}} <- Jason.decode(contents) do
+      id
+    else
+      _ -> nil
+    end
   end
 
   # `ANTHROPIC_BASE_URL` is checked for an id rather than for presence. The
@@ -354,6 +390,28 @@ defmodule ClientUtils.Harness.Onboarding do
 
       {:error, reason} ->
         {{:error, reason}, nil}
+    end
+  end
+
+  # `effective_id` already carries a previous good run's id forward when this
+  # run has none — see `write_settings/5` — so reusing it here is what makes a
+  # bare re-run idempotent instead of a second, independent merge that could
+  # disagree with the one `settings.local.json` just went through. A run that
+  # is still unaddressed writes nothing: a file with a blank `harness_id` is
+  # not a match to the relay's own walk (it keeps walking up), so it would sit
+  # there looking like configuration while doing nothing but inviting someone
+  # to trust it.
+  defp write_harness_config(_io, _root, nil), do: {:ok, :skipped}
+
+  defp write_harness_config(io, root, harness_id) do
+    contents =
+      Jason.encode!(%{"harness_id" => harness_id, "project_id" => nil, "root" => root},
+        pretty: true
+      )
+
+    case io.write(root, harness_config_path(), contents) do
+      :ok -> {:ok, harness_config_path()}
+      {:error, reason} -> {:error, reason}
     end
   end
 
