@@ -90,8 +90,11 @@ defmodule Mix.Tasks.Harness.Onboard do
     onboarded: #{report.root}
       partition:  #{report.partition}
       settings:   #{describe(report.settings)}
+      address:    #{describe_address(report.harness_id)}
       submodules: #{if report.git.submodule_recurse, do: "recursing", else: "not configured"}
     """)
+
+    if is_nil(report.harness_id), do: warn_no_id()
 
     Mix.shell().info("Databases this working copy needs (create and migrate them yourself):")
 
@@ -100,6 +103,28 @@ defmodule Mix.Tasks.Harness.Onboard do
     end)
 
     report
+  end
+
+  defp describe_address(nil), do: "not addressed — no harness id"
+  defp describe_address(id), do: "addressed (#{id})"
+
+  # Loud, not just absent from the summary above. This is the exact half-onboarded
+  # state a silent success used to leave behind — the copy printed "onboarded:"
+  # while ANTHROPIC_BASE_URL and CMS_HARNESS_ID were still whatever an earlier
+  # run left (nothing, on a first run), and every hook and model turn kept
+  # answering confidently about a working copy that was never actually
+  # addressed.
+  defp warn_no_id do
+    Mix.shell().info("""
+
+    No harness id was given, so hooks, MCP and model turns are NOT addressed
+    yet — nothing else in this run overwrote a working address if one was
+    already here, but a first-time onboard stops here unaddressed.
+
+    Run again with the id this working copy was issued:
+
+        mix harness.onboard --id <id>
+    """)
   end
 
   defp describe({:ok, path}), do: path

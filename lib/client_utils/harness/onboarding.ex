@@ -194,15 +194,21 @@ defmodule ClientUtils.Harness.Onboarding do
   stages one machine's identity for commit and the next clone inherits it, looking
   onboarded while talking to a harness that is not its own.
   """
-  @spec settings(String.t(), String.t(), String.t()) :: map()
+  @spec settings(String.t() | nil, String.t(), String.t()) :: map()
   def settings(harness_id, partition, base_url) do
-    %{
-      "env" => %{
-        "ANTHROPIC_BASE_URL" => anthropic_url(base_url, harness_id),
-        "MIX_TEST_PARTITION" => partition,
-        "CMS_HARNESS_ID" => harness_id
-      }
-    }
+    %{"env" => address(harness_id, base_url) |> Map.put("MIX_TEST_PARTITION", partition)}
+  end
+
+  # No id, no address. `"#{nil}"` renders as `""`, not the atom's name — so
+  # interpolating a missing id here used to produce
+  # `http://localhost:4004/api/harnesses/`, the exact dangling prefix
+  # `blank_or_invalid?/2` below exists to catch, written silently by a run
+  # that reported full success. Both keys are absent instead, so a copy that
+  # cannot yet be addressed does not look addressed.
+  defp address(nil, _base_url), do: %{}
+
+  defp address(harness_id, base_url) when is_binary(harness_id) do
+    %{"ANTHROPIC_BASE_URL" => anthropic_url(base_url, harness_id), "CMS_HARNESS_ID" => harness_id}
   end
 
   @doc "The file settings belong in. Untracked, deliberately — see `settings/2`."
@@ -249,11 +255,13 @@ defmodule ClientUtils.Harness.Onboarding do
     base_url = Keyword.get(opts, :base_url, "http://localhost:4004")
     partition = partition_name(root)
 
+    {settings, effective_id} = write_settings(io, root, harness_id, partition, base_url)
+
     %{
       root: root,
-      harness_id: harness_id,
+      harness_id: effective_id,
       partition: partition,
-      settings: write_settings(io, root, harness_id, partition, base_url),
+      settings: settings,
       databases: databases(partition, app),
       git: %{submodule_recurse: configure_git(io, root)},
       issued_ddl: false
@@ -329,29 +337,43 @@ defmodule ClientUtils.Harness.Onboarding do
   # anyone unsure whether a copy is onboarded has to reason about it instead of
   # simply running it again.
   defp write_settings(io, root, harness_id, partition, base_url) do
-    with {:ok, existing} <- read_settings(io, root) do
-      merged =
-        Map.put(
-          existing,
-          "env",
+    case read_settings(io, root) do
+      {:ok, existing} ->
+        merged_env =
           merge_env(Map.get(existing, "env", %{}), settings(harness_id, partition, base_url)["env"])
-        )
 
-      case io.write(root, settings_path(), Jason.encode!(merged, pretty: true)) do
-        :ok -> {:ok, settings_path()}
-        {:error, reason} -> {:error, reason}
-      end
+        merged = Map.put(existing, "env", merged_env)
+
+        result =
+          case io.write(root, settings_path(), Jason.encode!(merged, pretty: true)) do
+            :ok -> {:ok, settings_path()}
+            {:error, reason} -> {:error, reason}
+          end
+
+        {result, merged_env["CMS_HARNESS_ID"]}
+
+      {:error, reason} ->
+        {{:error, reason}, nil}
     end
   end
 
-  # The address is corrected on every run; the partition is set once. A partition
-  # that moved would rename a database that already has migrations in it.
+  # The address is corrected on every run *that has one to give* — a run with
+  # no harness id carries neither key in `incoming` (see `address/2`) and must
+  # not blank out an address a previous, real run already wrote. The partition
+  # is set once regardless; a partition that moved would rename a database
+  # that already has migrations in it.
   defp merge_env(existing, incoming) do
     existing
-    |> Map.put("ANTHROPIC_BASE_URL", incoming["ANTHROPIC_BASE_URL"])
-    |> Map.put("CMS_HARNESS_ID", incoming["CMS_HARNESS_ID"])
+    |> merge_if_present("ANTHROPIC_BASE_URL", incoming)
+    |> merge_if_present("CMS_HARNESS_ID", incoming)
     |> Map.put_new("MIX_TEST_PARTITION", incoming["MIX_TEST_PARTITION"])
-    |> Map.reject(fn {_key, value} -> is_nil(value) end)
+  end
+
+  defp merge_if_present(map, key, incoming) do
+    case Map.get(incoming, key) do
+      nil -> map
+      value -> Map.put(map, key, value)
+    end
   end
 
   # Unparseable is a refusal, not an empty object. Rewriting a malformed settings
