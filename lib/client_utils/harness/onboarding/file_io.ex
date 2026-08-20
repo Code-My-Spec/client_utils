@@ -7,18 +7,16 @@ defmodule ClientUtils.Harness.Onboarding.FileIO do
   `File` and `System.cmd/3`, rooted at a directory — and it is what a generated
   application gets without configuring anything.
 
-  A host with its own filesystem abstraction passes its own module instead. That
-  is not hypothetical: CodeMySpec routes every write through `Environments` so its
-  specs can drive onboarding against an in-memory working copy, and without a seam
-  here the only way to exercise onboarding at all is to build a real directory —
-  temp dir, git repo, plugin tree — which is four fixtures standing in for one
-  surface.
+  Its handle is the root, because a directory is all this needs. A host with its
+  own filesystem abstraction passes `{ThatModule, handle}` instead; the callback
+  names here are `CodeMySpec.Environments`' names precisely so that host writes
+  no adapter — see `ClientUtils.Harness.Onboarding.Port`.
   """
 
   @behaviour ClientUtils.Harness.Onboarding.IO
 
   @impl true
-  def read(root, path) do
+  def read_file(root, path) do
     case File.read(Path.join(root, path)) do
       {:ok, contents} -> {:ok, contents}
       {:error, reason} -> {:error, reason}
@@ -26,7 +24,7 @@ defmodule ClientUtils.Harness.Onboarding.FileIO do
   end
 
   @impl true
-  def write(root, path, contents) do
+  def write_file(root, path, contents) do
     full = Path.join(root, path)
 
     with :ok <- File.mkdir_p(Path.dirname(full)) do
@@ -35,11 +33,13 @@ defmodule ClientUtils.Harness.Onboarding.FileIO do
   end
 
   @impl true
-  def exists?(root, path), do: File.exists?(Path.join(root, path))
+  def file_exists?(root, path), do: File.exists?(Path.join(root, path))
 
+  # The port supplies `stderr_to_stdout: true`; `cd` is this adapter's own, the
+  # root being its whole state.
   @impl true
-  def cmd(root, command, args) do
-    System.cmd(command, args, cd: root, stderr_to_stdout: true)
+  def cmd(root, command, args, opts \\ []) do
+    System.cmd(command, args, Keyword.merge(opts, cd: root))
   rescue
     # A missing binary raises rather than returning non-zero, and onboarding
     # treats "could not run it" the same as "it refused" — both mean the step did

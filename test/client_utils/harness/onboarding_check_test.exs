@@ -36,7 +36,7 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
     @behaviour ClientUtils.Harness.Onboarding.IO
 
     @impl true
-    def read(_root, path) do
+    def read_file(_root, path) do
       case Process.get({:settings, path}) do
         nil -> {:error, :enoent}
         contents -> {:ok, contents}
@@ -44,16 +44,16 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
     end
 
     @impl true
-    def exists?(_root, path), do: Process.get({:settings, path}) != nil
+    def file_exists?(_root, path), do: Process.get({:settings, path}) != nil
 
     @impl true
-    def write(_root, path, contents) do
+    def write_file(_root, path, contents) do
       Process.put({:settings, path}, contents)
       :ok
     end
 
     @impl true
-    def cmd(_root, _command, _args), do: {"", 0}
+    def cmd(_root, _command, _args, _opts \\ []), do: {"", 0}
   end
 
   defp put_settings(env) do

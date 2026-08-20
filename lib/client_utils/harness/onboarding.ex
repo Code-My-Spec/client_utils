@@ -4,9 +4,17 @@ defmodule ClientUtils.Harness.Onboarding do
 
   Pure policy, so the two callers can share it without sharing anything else.
   `Mix.Tasks.Harness.Onboard` writes these results to disk for a generated
-  application; CodeMySpec's `Mix.Tasks.Cms.OnboardHarness` writes the same results
-  through its own environment abstraction. Neither this module nor that task
+  application; CodeMySpec's `Mix.Tasks.Cms.Harness.Onboard` writes the same
+  results through its own environment abstraction, by passing
+  `io: {CodeMySpec.Environments, env}` and no adapter at all — see
+  `ClientUtils.Harness.Onboarding.Port`, whose four callbacks are that module's
+  own functions for exactly this reason. Neither this module nor that task
   learns what the other is.
+
+  That claim was false for a week. `c570d32` introduced the port and reported
+  the integration in the past tense — "CodeMySpec's own task calls the same code
+  with its own filesystem adapter" — while nothing there called it and the port
+  as written could not have carried it. Both halves are true as of 0.1.30.
 
   That split is the reason onboarding lives here rather than in CodeMySpec: a
   generated application depends on `client_utils` and not on CodeMySpec, so this
@@ -133,11 +141,17 @@ defmodule ClientUtils.Harness.Onboarding do
   name. Two full suites in one database, live every time someone tested during a
   sweep, failing in the direction of "your branch broke these tests".
 
-  This list is what tells anyone which databases to create, and nothing creates
-  them on its own: the harness names databases and does not manage them, after a
-  version that shelled out to `mix` with `MIX_ENV` scrubbed and emptied dev three
-  times on 2026-08-13. So a partition missing from here is a database nobody is
-  told to create, and the analyzer meets it as "database does not exist".
+  This list is what tells anyone which databases a working copy uses, and
+  nothing here creates them: onboarding names databases and does not manage
+  them, after a version that shelled out to `mix` with `MIX_ENV` scrubbed and
+  emptied dev three times on 2026-08-13. A partition missing from here is a
+  database nobody knows about.
+
+  What a *host* does with the list is its own business, and CodeMySpec now
+  creates them in-VM on the first `mix test` or `mix spex` that needs one —
+  which is a different thing from a background process with DDL rights over a
+  server an absent environment variable could re-aim. This library still returns
+  strings.
 
   Each command names its own database for the same reason. The migration guard
   printed `MIX_ENV=test mix ecto.migrate` while checking a partition that command
@@ -207,7 +221,8 @@ defmodule ClientUtils.Harness.Onboarding do
   def settings(harness_id, partition, base_url, relay_model_turns? \\ false) do
     %{
       "env" =>
-        address(harness_id, base_url, relay_model_turns?) |> Map.put("MIX_TEST_PARTITION", partition)
+        address(harness_id, base_url, relay_model_turns?)
+        |> Map.put("MIX_TEST_PARTITION", partition)
     }
   end
 
@@ -261,6 +276,8 @@ defmodule ClientUtils.Harness.Onboarding do
   def git_config, do: [{"submodule.recurse", "true"}]
 
   @default_io ClientUtils.Harness.Onboarding.FileIO
+
+  alias ClientUtils.Harness.Onboarding.Port
 
   @doc """
   Configure the working copy at `root`, and report what is left.
@@ -382,7 +399,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # relay reads it: only `harness_id` matters, and a blank one is absence, not
   # presence — see that function's comment for why a run never writes one.
   defp read_harness_config_id(io, root) do
-    with {:ok, contents} <- io.read(root, harness_config_path()),
+    with {:ok, contents} <- Port.read(io, root, harness_config_path()),
          {:ok, %{"harness_id" => id}} <- Jason.decode(contents) do
       id
     else
@@ -420,7 +437,7 @@ defmodule ClientUtils.Harness.Onboarding do
         merged = Map.put(existing, "env", merged_env)
 
         result =
-          case io.write(root, settings_path(), Jason.encode!(merged, pretty: true)) do
+          case Port.write(io, root, settings_path(), Jason.encode!(merged, pretty: true)) do
             :ok -> {:ok, settings_path()}
             {:error, reason} -> {:error, reason}
           end
@@ -442,13 +459,40 @@ defmodule ClientUtils.Harness.Onboarding do
   # to trust it.
   defp write_harness_config(_io, _root, nil), do: {:ok, :skipped}
 
+  # Merged, never stamped — the same rule this module already applies to
+  # `settings.local.json`, applied to the other file it owns.
+  #
+  # It wrote `"project_id" => nil` unconditionally, and that is destructive for
+  # a host that knows the project: CodeMySpec's own task writes this file first,
+  # with the real id, and this then overwrote it with null. Worse, it did so
+  # *through the port*, which walks straight past `CmsHarness.HarnessConfig.write/2`
+  # and its refusal to overwrite an existing config — a guard that only guards
+  # the door it is on.
+  #
+  # So the keys this run has an answer for are set, and every other key already
+  # in the file is kept. A library that writes a key it has no value for is a
+  # library that erases its caller's.
   defp write_harness_config(io, root, harness_id) do
-    contents =
-      Jason.encode!(%{"harness_id" => harness_id, "project_id" => nil, "root" => root},
-        pretty: true
-      )
+    existing =
+      case Port.read(io, root, harness_config_path()) do
+        {:ok, contents} ->
+          case Jason.decode(contents) do
+            {:ok, %{} = decoded} -> decoded
+            _ -> %{}
+          end
 
-    case io.write(root, harness_config_path(), contents) do
+        _ ->
+          %{}
+      end
+
+    contents =
+      existing
+      |> Map.put("harness_id", harness_id)
+      |> Map.put("root", root)
+      |> Map.put_new("project_id", nil)
+      |> Jason.encode!(pretty: true)
+
+    case Port.write(io, root, harness_config_path(), contents) do
       :ok -> {:ok, harness_config_path()}
       {:error, reason} -> {:error, reason}
     end
@@ -477,7 +521,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # file from scratch destroys whatever someone was halfway through editing, and
   # half-edited is exactly the state they are in when they run this to fix it.
   defp read_settings(io, root) do
-    case io.read(root, settings_path()) do
+    case Port.read(io, root, settings_path()) do
       {:ok, ""} ->
         {:ok, %{}}
 
@@ -506,7 +550,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # could not run would report the absence of a repository as a failure to onboard.
   defp configure_git(io, root) do
     Enum.reduce_while(git_config(), true, fn {key, value}, true ->
-      case io.cmd(root, "git", ["config", key, value]) do
+      case Port.cmd(io, root, "git", ["config", key, value]) do
         {_out, 0} -> {:cont, true}
         _ -> {:halt, false}
       end
