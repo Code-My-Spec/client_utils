@@ -102,10 +102,23 @@ defmodule Mix.Tasks.Harness.Onboard do
     status
   end
 
+  # The header says which of the two states this is.
+  #
+  # It said `onboarded:` unconditionally, including for a run that addressed
+  # nothing — and `warn_no_id/0` below already knew that state was dangerous
+  # enough to shout about. Shouting under a header that says the opposite is
+  # worse than either alone: `mix harness.onboard` printed `onboarded:` while
+  # `mix harness.onboard --check`, one command later, printed `not onboarded`
+  # and named the two keys. One task, one working copy, two answers.
+  #
+  # Measured in the devbox on a stock generated project, 2026-08-20. An agent
+  # reads the first line and moves on with hooks, MCP and model turns all
+  # unaddressed; or it reads `--check`, is told to run the command, runs it, is
+  # told `onboarded`, and never gets out of that loop.
   defp report_onboard(report) do
     Mix.shell().info("""
 
-    onboarded: #{report.root}
+    #{headline(report)}: #{report.root}
       partition:  #{report.partition}
       settings:   #{describe(report.settings)}
       address:    #{describe_address(report.harness_id)}
@@ -123,6 +136,13 @@ defmodule Mix.Tasks.Harness.Onboard do
 
     report
   end
+
+  # The same question `check/2` answers, answered the same way. A copy without a
+  # harness id has no addressed hooks, no MCP and no recorded identity, which is
+  # the whole of what onboarding is for — the partition and the git config are
+  # real work and are not that.
+  defp headline(%{harness_id: nil}), do: "partially onboarded"
+  defp headline(_report), do: "onboarded"
 
   defp describe_address(nil), do: "not addressed — no harness id"
   defp describe_address(id), do: "addressed (#{id})"

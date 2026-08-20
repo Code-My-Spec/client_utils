@@ -356,7 +356,37 @@ defmodule ClientUtils.Harness.Onboarding do
     io = Keyword.get(opts, :io, @default_io)
     missing = missing_settings(io, root)
 
-    %{onboarded: missing == [], missing: missing, remedy: "mix harness.onboard"}
+    %{onboarded: missing == [], missing: missing, remedy: remedy(missing, opts)}
+  end
+
+  # The keys that only a harness id can supply.
+  @id_dependent ["CMS_HARNESS_ID", "HARNESS_CONFIG", "ANTHROPIC_BASE_URL"]
+
+  # A remedy has to be a command that can actually work.
+  #
+  # This was the constant `"mix harness.onboard"`, and for the state it is most
+  # often read in that is a loop: a freshly generated application is missing
+  # `CMS_HARNESS_ID` and `HARNESS_CONFIG`, and a bare `mix harness.onboard`
+  # cannot supply either — nothing in a generated app mints an id, so the run
+  # completes, says so, and leaves exactly the same two keys missing. Read the
+  # advice, follow it, get told the same thing again, forever.
+  #
+  # Measured in the devbox 2026-08-20: `--check` on a stock generated project
+  # printed `missing: CMS_HARNESS_ID, HARNESS_CONFIG` and `run: mix
+  # harness.onboard`, which had just run.
+  #
+  # `remedy:` is an option because the right command depends on who is asking.
+  # CodeMySpec's task mints an id against the server, so for it the bare command
+  # *is* sufficient and naming `--id` there would send a reader looking for a
+  # value they never need.
+  defp remedy(missing, opts) do
+    default =
+      case Enum.any?(missing, &(&1 in @id_dependent)) do
+        true -> "mix harness.onboard --id <the harness id from CodeMySpec>"
+        false -> "mix harness.onboard"
+      end
+
+    Keyword.get(opts, :remedy, default)
   end
 
   # An absent file is every key missing rather than a special case: the caller

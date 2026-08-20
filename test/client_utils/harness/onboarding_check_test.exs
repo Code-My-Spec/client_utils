@@ -155,11 +155,45 @@ defmodule ClientUtils.Harness.Onboarding.CheckTest do
     assert %{onboarded: false, missing: ["HARNESS_CONFIG"]} = check()
   end
 
-  test "the remedy is still the command that repairs a partial copy" do
+  # This test used to pin `remedy: "mix harness.onboard"` for exactly this
+  # state, reasoning that "the write is a merge, so re-running repairs without
+  # disturbing anything the operator put there". The merge part is true and is
+  # covered elsewhere; it is a different question from whether the bare command
+  # can *supply* what is missing. It cannot: nothing in a generated application
+  # mints a harness id, so a bare re-run completes, reports itself, and leaves
+  # `CMS_HARNESS_ID` and `HARNESS_CONFIG` exactly as absent as before.
+  #
+  # Measured in the devbox on a stock generated project, 2026-08-20: `--check`
+  # printed `missing: CMS_HARNESS_ID, HARNESS_CONFIG` and `run: mix
+  # harness.onboard`, which had just run and had just said `onboarded:`. Advice
+  # that loops is worse than no advice, because it is followed.
+  test "a copy missing its id is told to supply one" do
     put_settings(%{})
 
-    assert %{remedy: "mix harness.onboard"} = check(),
-           "the write is a merge, so re-running repairs without disturbing " <>
-             "anything the operator put there"
+    assert %{remedy: remedy} = check()
+    assert remedy =~ "--id"
+  end
+
+  test "a copy missing only the partition is told the bare command, which does fix it" do
+    put_settings(%{
+      "CMS_HARNESS_ID" => "d1c8f8f5-1111-2222-3333-444455556666"
+    })
+
+    put_hooks_config("d1c8f8f5-1111-2222-3333-444455556666")
+
+    assert %{missing: ["MIX_TEST_PARTITION"], remedy: "mix harness.onboard"} = check(),
+           "the partition is assigned by onboarding itself, so here the bare " <>
+             "command really is the whole fix and naming --id would send the " <>
+             "reader hunting a value they do not need"
+  end
+
+  # CodeMySpec's task mints against the server, so for a copy there the bare
+  # command *is* sufficient. The right advice depends on who is asking, which is
+  # why it is an option rather than something this module can know.
+  test "a caller that can mint supplies its own remedy" do
+    put_settings(%{})
+
+    assert %{remedy: "mix cms.harness.onboard"} =
+             Onboarding.check(@root, io: FakeIO, remedy: "mix cms.harness.onboard")
   end
 end
