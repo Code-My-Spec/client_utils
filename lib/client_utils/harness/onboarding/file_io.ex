@@ -32,6 +32,12 @@ defmodule ClientUtils.Harness.Onboarding.FileIO do
     end
   end
 
+  # Not an `@impl`: `chmod/3` is optional on the port, because a host writing
+  # through a channel and an in-memory adapter have no local inode to restrict.
+  # This adapter is the real filesystem, so it is the one that can.
+  @spec chmod(String.t(), String.t(), non_neg_integer()) :: :ok | {:error, term()}
+  def chmod(root, path, mode), do: File.chmod(Path.join(root, path), mode)
+
   @impl true
   def file_exists?(root, path), do: File.exists?(Path.join(root, path))
 

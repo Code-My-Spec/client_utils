@@ -43,6 +43,31 @@ defmodule ClientUtils.Harness.Onboarding.Port do
   @spec write(t(), String.t(), String.t(), String.t()) :: :ok | {:error, term()}
   def write(io, root, path, contents), do: call(io, root, :write_file, [path, contents])
 
+  @doc """
+  Restrict a file this run just wrote, where the adapter can.
+
+  Optional, and silently skipped by an adapter that does not implement it. Two
+  of the three cannot honour it meaningfully: a host writing through a channel
+  to another machine, and an in-memory adapter, have no local inode to restrict.
+  `FileIO` does, and `.cms_harness.json` holds a deploy key once one is
+  recorded — git ignores that file, which keeps it out of the repository, and
+  this keeps it out of the other accounts on the machine.
+
+  Never load-bearing. A copy whose mode could not be set is still onboarded, and
+  saying so would be noise on every adapter that legitimately has nothing to do.
+  """
+  @spec chmod(t(), String.t(), String.t(), non_neg_integer()) :: :ok
+  def chmod(io, root, path, mode) do
+    _ = if exports?(io, :chmod, 3), do: call(io, root, :chmod, [path, mode])
+    :ok
+  end
+
+  defp exports?({module, _state}, fun, arity), do: exports?(module, fun, arity)
+
+  defp exports?(module, fun, arity) do
+    Code.ensure_loaded?(module) and function_exported?(module, fun, arity)
+  end
+
   @spec exists?(t(), String.t(), String.t()) :: boolean()
   def exists?(io, root, path), do: call(io, root, :file_exists?, [path])
 

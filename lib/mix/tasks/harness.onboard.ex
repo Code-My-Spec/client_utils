@@ -4,12 +4,34 @@ defmodule Mix.Tasks.Harness.Onboard do
   @moduledoc """
   Take the working copy this runs in from checkout to ready.
 
-      mix harness.onboard [PATH] [--check] [--relay-model-turns]
+      mix harness.onboard [PATH] [--check] [--relay-model-turns] [--deploy-key KEY]
 
   Writes the settings an agent session needs — the harness id its MCP mount
   addresses with, and the test partition its databases are named after —
   sets the git config the copy needs, and then names the databases it still wants
   without creating any of them.
+
+  ## `--deploy-key`, and why a copy needs one
+
+  A deploy key reaches exactly one project — deliberately, so a harness on one
+  project does not inherit everything its owner can do — while one harness serves
+  every checkout it has a subtree for. A daemon holding a single key from its
+  environment can therefore only join one project: a second project's copy
+  connects its socket, has every join refused, and every hook in it answers
+  "channel down, server answering 200" while the harness's own `/health` says
+  connected, because that is about the socket.
+
+  So the key is recorded in the copy's own `.cms_harness.json`, beside the
+  identity it authenticates and where the harness already walks up to find it.
+  Git ignores that file and it is written `0600`.
+
+  Taken from `--deploy-key`, or from `CMS_DEPLOY_KEY` when the flag is absent.
+  Get it from `<server>/app/projects/<project-id>/edit` — Generate fills the
+  field, Save is what stores the hash, so a key copied without saving matches
+  nothing.
+
+  Omitting it is fine and never blanks a key already recorded. A sprite, whose
+  daemon holds its one project's key in the environment, needs nothing here.
 
   ## `--relay-model-turns` is opt-in, and defaults off
 
@@ -48,7 +70,12 @@ defmodule Mix.Tasks.Harness.Onboard do
   def run(args) do
     {opts, rest, _invalid} =
       OptionParser.parse(args,
-        strict: [check: :boolean, id: :string, relay_model_turns: :boolean]
+        strict: [
+          check: :boolean,
+          id: :string,
+          relay_model_turns: :boolean,
+          deploy_key: :string
+        ]
       )
 
     root = rest |> List.first() |> root_or_cwd()
@@ -59,6 +86,17 @@ defmodule Mix.Tasks.Harness.Onboard do
     end
   end
 
+  # The flag first, then the environment. Both are ways of saying "this copy's
+  # project is this one", and the flag is the more deliberate of the two — a
+  # `CMS_DEPLOY_KEY` in the shell belongs to whatever that shell was set up for,
+  # which is exactly the mismatch this records against.
+  defp deploy_key(opts) do
+    case Keyword.get(opts, :deploy_key) do
+      key when is_binary(key) and key != "" -> key
+      _ -> System.get_env("CMS_DEPLOY_KEY")
+    end
+  end
+
   # The app name is required, never defaulted. Defaulting it is what produced
   # `code_my_spec_test_*` inside an application called something else — a printed
   # command that creates a different database than the one it names.
@@ -66,7 +104,8 @@ defmodule Mix.Tasks.Harness.Onboard do
     [
       harness_id: Keyword.get(opts, :id),
       app: Mix.Project.config()[:app],
-      relay_model_turns: Keyword.get(opts, :relay_model_turns, false)
+      relay_model_turns: Keyword.get(opts, :relay_model_turns, false),
+      deploy_key: deploy_key(opts)
     ]
   end
 

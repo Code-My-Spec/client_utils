@@ -297,6 +297,24 @@ defmodule ClientUtils.Harness.Onboarding do
   sibling truncate emptied it three times on 2026-08-13.
 
   **No worktree is created.** This configures the copy it is pointed at.
+
+  ## `deploy_key:`
+
+  Recorded into `.cms_harness.json` when given, so the harness serving this copy
+  can authenticate *as this project*. A deploy key reaches exactly one project —
+  deliberately — while one harness serves every checkout it has a subtree for, so
+  a daemon holding a single key from its environment can only join one of them.
+  A second project's copy connects its socket and has every join refused, with
+  every hook in it answering "channel down, server answering 200" while the
+  harness's own `/health` says connected, because that is about the socket.
+
+  It goes in this file rather than a store of its own because this is already
+  where a working copy says what it is, and the harness already walks up to it.
+  Git never sees it, and `FileIO` restricts it to `0600`.
+
+  Omitting it is not an error and never blanks a key already recorded: a copy
+  served by a daemon that holds this project's key in its environment — a sprite
+  — needs nothing here.
   """
   @spec onboard(String.t(), keyword()) :: map()
   def onboard(root, opts \\ []) do
@@ -310,7 +328,7 @@ defmodule ClientUtils.Harness.Onboarding do
     {settings, effective_id} =
       write_settings(io, root, harness_id, partition, base_url, relay_model_turns?)
 
-    hooks = write_harness_config(io, root, effective_id)
+    hooks = write_harness_config(io, root, effective_id, Keyword.get(opts, :deploy_key))
 
     %{
       root: root,
@@ -487,7 +505,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # not a match to the relay's own walk (it keeps walking up), so it would sit
   # there looking like configuration while doing nothing but inviting someone
   # to trust it.
-  defp write_harness_config(_io, _root, nil), do: {:ok, :skipped}
+  defp write_harness_config(_io, _root, nil, _deploy_key), do: {:ok, :skipped}
 
   # Merged, never stamped — the same rule this module already applies to
   # `settings.local.json`, applied to the other file it owns.
@@ -502,7 +520,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # So the keys this run has an answer for are set, and every other key already
   # in the file is kept. A library that writes a key it has no value for is a
   # library that erases its caller's.
-  defp write_harness_config(io, root, harness_id) do
+  defp write_harness_config(io, root, harness_id, deploy_key) do
     existing =
       case Port.read(io, root, harness_config_path()) do
         {:ok, contents} ->
@@ -520,13 +538,30 @@ defmodule ClientUtils.Harness.Onboarding do
       |> Map.put("harness_id", harness_id)
       |> Map.put("root", root)
       |> Map.put_new("project_id", nil)
+      |> put_deploy_key(deploy_key)
       |> Jason.encode!(pretty: true)
 
     case Port.write(io, root, harness_config_path(), contents) do
-      :ok -> {:ok, harness_config_path()}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        # It holds a credential now. `.gitignore` keeps this file out of the
+        # repository; the mode keeps it out of the other accounts on the machine.
+        # Set unconditionally rather than only when a key was passed — a copy
+        # that recorded one on an earlier run still has one in the file.
+        Port.chmod(io, root, harness_config_path(), 0o600)
+        {:ok, harness_config_path()}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
+
+  # A run with no key to give keeps the one already recorded. Same rule as the
+  # address above, and the same reason: a library that writes a key it has no
+  # value for is a library that erases its caller's.
+  defp put_deploy_key(config, key) when is_binary(key) and key != "",
+    do: Map.put(config, "deploy_key", key)
+
+  defp put_deploy_key(config, _key), do: config
 
   # The address is corrected on every run *that has one to give* — a run with
   # no harness id carries neither key in `incoming` (see `address/2`) and must
