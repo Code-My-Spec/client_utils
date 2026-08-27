@@ -44,13 +44,18 @@ defmodule ClientUtils.Harness.PreviewTest do
                    "preview_url" => "https://preview-#{@id}.codemyspec.com",
                    "tunnel_id" => "tunnel-1",
                    "tunnel_secret" => "c2VjcmV0",
-                   "account_tag" => "acct-1"
+                   "account_tag" => "acct-1",
+                   "embedder" => "https://codemyspec.test"
                  })
                )
 
       assert preview["preview_url"] == "https://preview-#{@id}.codemyspec.com"
       assert preview["preview_tunnel_id"] == "tunnel-1"
       assert preview["preview_tunnel_secret"] == "c2VjcmV0"
+
+      assert preview["preview_embedder"] == "https://codemyspec.test",
+             "the server says who may frame this app; an app left to guess can " <>
+               "guess wrong, and wrong here refuses the pane silently"
 
       assert preview["preview_account_tag"] == "acct-1",
              "cloudflared's credentials file names the account, so a copy without it " <>

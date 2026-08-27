@@ -597,7 +597,8 @@ defmodule ClientUtils.Harness.Onboarding do
       "preview_url",
       "preview_tunnel_id",
       "preview_tunnel_secret",
-      "preview_account_tag"
+      "preview_account_tag",
+      "preview_embedder"
     ])
     |> Enum.reduce(config, fn
       {_key, value}, acc when value in [nil, ""] -> acc

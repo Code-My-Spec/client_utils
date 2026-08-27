@@ -152,9 +152,11 @@ defmodule ClientUtils.Harness.Preview do
   what leaves the tunnel disabled, so an app with no preview starts normally
   instead of dialling a tunnel that does not exist.
 
-  `embedder` is derived rather than stored. It is the origin allowed to frame
-  this app, which is the site that issued the preview — not the preview address
-  itself, which is this app.
+  `embedder` is whatever the server said when it provisioned the preview — the
+  origin allowed to frame this app, which is the site that issued it, not the
+  preview address itself. Falls back to a default only for a copy provisioned
+  before the server started returning it; that default is right for exactly one
+  deployment, which is why it is last.
   """
   @spec from_checkout(String.t(), keyword()) :: keyword()
   def from_checkout(root, opts \\ []) do
@@ -166,7 +168,11 @@ defmodule ClientUtils.Harness.Preview do
           account_tag: config["preview_account_tag"],
           tunnel_secret: config["preview_tunnel_secret"],
           origin_url: Keyword.get(opts, :origin_url, "http://127.0.0.1:4000"),
-          embedder: Keyword.get(opts, :embedder, default_embedder())
+          # What the server said, when it said anything. The fallback is a guess
+          # and is only right for one deployment.
+          embedder:
+            Keyword.get(opts, :embedder) || present(config["preview_embedder"]) ||
+              default_embedder()
         ]
 
       _ ->
@@ -203,7 +209,13 @@ defmodule ClientUtils.Harness.Preview do
        "preview_url" => body["preview_url"],
        "preview_tunnel_id" => body["tunnel_id"],
        "preview_tunnel_secret" => body["tunnel_secret"],
-       "preview_account_tag" => body["account_tag"]
+       "preview_account_tag" => body["account_tag"],
+       # Who may frame this app, as the server that provisioned the preview says
+       # it. Stored rather than defaulted: an app carrying its own guess can
+       # carry the wrong one, and wrong here is silent — the browser refuses the
+       # frame, the iframe looks healthy and renders nothing, and it reads as
+       # this app being broken.
+       "preview_embedder" => body["embedder"]
      }}
   end
 
