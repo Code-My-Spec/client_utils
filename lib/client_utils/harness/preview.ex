@@ -80,6 +80,67 @@ defmodule ClientUtils.Harness.Preview do
   def ensure(_server_url, _working_copy_id, _deploy_key, _opts), do: :none
 
   @doc """
+  This application's preview, wherever it is running.
+
+  Two sources, because there are two ways an app runs and only one of them has a
+  checkout. On a developer's machine the values are in `.cms_harness.json`,
+  written there by onboarding. In a container there is no checkout at all — the
+  image holds the application and nothing else — so they arrive as environment
+  variables.
+
+  The file wins where both are present. A container has no file, and a
+  developer's machine has no reason to carry these in its environment, so they
+  do not compete in practice; the ordering matters only for the case where
+  somebody has exported them by hand, and there the checkout is the thing that
+  was actually provisioned.
+
+  Empty when neither says anything, which leaves the tunnel disabled.
+  """
+  @spec config(String.t(), keyword()) :: keyword()
+  def config(root, opts \\ []) do
+    case from_checkout(root, opts) do
+      [] -> from_env(opts)
+      recorded -> recorded
+    end
+  end
+
+  @doc """
+  The preview named by the environment, for an application running in a
+  container.
+
+  `CMS_PREVIEW_TUNNEL_ID` is what decides there is one, the same way
+  `preview_tunnel_id` does in a checkout: an address with no tunnel behind it
+  resolves to an edge holding no connection to this app, and the frame sits
+  blank with nothing saying why.
+  """
+  @spec from_env(keyword()) :: keyword()
+  def from_env(opts \\ []) do
+    case present(System.get_env("CMS_PREVIEW_TUNNEL_ID")) do
+      nil ->
+        []
+
+      tunnel_id ->
+        [
+          hostname: present(System.get_env("CMS_PREVIEW_HOSTNAME")),
+          tunnel_id: tunnel_id,
+          account_tag: present(System.get_env("CMS_PREVIEW_ACCOUNT_TAG")),
+          tunnel_secret: present(System.get_env("CMS_PREVIEW_TUNNEL_SECRET")),
+          origin_url: Keyword.get(opts, :origin_url, "http://127.0.0.1:4000"),
+          embedder: Keyword.get(opts, :embedder, default_embedder())
+        ]
+    end
+  end
+
+  defp present(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp present(_value), do: nil
+
+  @doc """
   What a checkout's `.cms_harness.json` says about its preview, as application
   config.
 
