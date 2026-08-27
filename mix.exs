@@ -55,6 +55,11 @@ defmodule ClientUtils.MixProject do
       # `{:req, "~> 0.5"}` in every generated mix.exs since 1.7, so it is already
       # resolved wherever this runs.
       {:req, "~> 0.5"},
+      # For `ClientUtils.PreviewFraming`. Optional because a consumer that is not
+      # a web application has no use for it and should not be made to resolve
+      # it; every Phoenix app already has it, which is every app that could want
+      # the plug.
+      {:plug, "~> 1.0", optional: true},
       {:logger_file_backend, "~> 0.0.14"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
