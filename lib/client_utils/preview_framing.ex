@@ -33,11 +33,16 @@ defmodule ClientUtils.PreviewFraming do
 
   ## Use
 
-      plug ClientUtils.PreviewFraming
+      plug ClientUtils.PreviewFraming, otp_app: :my_app
 
   In the `:browser` pipeline, *after* `:put_secure_browser_headers` — it
   replaces that header's value, so running first would have the default write
   over it.
+
+  `otp_app:` is how it finds the preview: the address lives in the consuming
+  application's own `:preview` config, not in this library's. Without it the
+  plug is a no-op, which is the right failure — a library that guessed would
+  answer the same thing for every application in the release.
   """
 
   @behaviour Plug
@@ -73,27 +78,26 @@ defmodule ClientUtils.PreviewFraming do
 
   # Explicit configuration first, so an application can name an embedder without
   # having been onboarded — the case a test or a self-hosted install needs.
-  # Each source goes through `presence/1`, including this one. Passed straight
-  # through, a blank string is truthy and lands in the header as
-  # `frame-ancestors 'self'   ;` — which is not the secured default, and is a
-  # widening nobody asked for wearing the costume of a no-op.
+  # Each source goes through `presence/1`, including the explicit one. Passed
+  # straight through, a blank string is truthy and lands in the header as
+  # `frame-ancestors 'self'   ;` — not the secured default, and a widening
+  # nobody asked for wearing the costume of a no-op.
   defp embedder(opts) do
-    presence(opts[:frame_ancestors]) || configured() || from_preview()
+    presence(opts[:frame_ancestors]) || from_preview(opts[:otp_app])
   end
 
-  defp configured do
-    :client_utils
-    |> Application.get_env(__MODULE__, [])
-    |> Keyword.get(:frame_ancestors)
-    |> presence()
-  end
+  # Out of the *application's* own `:preview` config, which is where
+  # `Preview.from_checkout/2` puts it — not out of `:client_utils`. A library
+  # reading its own application environment for a value that belongs to its
+  # consumer would answer the same thing for every app in the release, which is
+  # exactly wrong for a value that says who may frame one of them.
+  #
+  # So the plug is told which app it is protecting. `nil` — the plug added
+  # without one — is a no-op rather than a guess.
+  defp from_preview(nil), do: nil
 
-  # Derived from the preview address the checkout was given, so an application
-  # that has one is embeddable by the site that gave it one and by nobody else.
-  # The origin rather than the address: a CSP source is a scheme and a host, and
-  # a path in it matches nothing.
-  defp from_preview do
-    :client_utils
+  defp from_preview(otp_app) do
+    otp_app
     |> Application.get_env(:preview, [])
     |> Keyword.get(:embedder)
     |> presence()

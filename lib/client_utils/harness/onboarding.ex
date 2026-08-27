@@ -585,14 +585,20 @@ defmodule ClientUtils.Harness.Onboarding do
   # where it was — re-onboarding a worktree must not blank the preview its main
   # checkout wrote into the same tree.
   #
-  # `account_tag` comes back on every ask and is deliberately not stored. It
-  # names the Cloudflare account the tunnel lives in, it is identical for every
-  # checkout of every project, and nothing in the copy reads it — writing it
-  # would put a detail of our infrastructure in every customer's working
-  # directory for no reader.
+  # `account_tag` is stored, and an earlier version of this dropped it on the
+  # reasoning that nothing in the copy reads it. That was wrong:
+  # `ClientUtils.CloudflareTunnel` in named mode requires it — it goes in the
+  # credentials file cloudflared reads — so a copy without it holds a tunnel it
+  # cannot run. Not a secret; it names an account, and it is already public in
+  # the CNAME target.
   defp put_preview(config, {:ok, preview}) do
     preview
-    |> Map.take(["preview_url", "preview_tunnel_id", "preview_tunnel_secret"])
+    |> Map.take([
+      "preview_url",
+      "preview_tunnel_id",
+      "preview_tunnel_secret",
+      "preview_account_tag"
+    ])
     |> Enum.reduce(config, fn
       {_key, value}, acc when value in [nil, ""] -> acc
       {key, value}, acc -> Map.put(acc, key, value)

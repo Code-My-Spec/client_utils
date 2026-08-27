@@ -52,9 +52,9 @@ defmodule ClientUtils.Harness.PreviewTest do
       assert preview["preview_tunnel_id"] == "tunnel-1"
       assert preview["preview_tunnel_secret"] == "c2VjcmV0"
 
-      assert preview["account_tag"] == "acct-1",
-             "the credentials file cloudflared reads names the account, so the caller " <>
-               "needs it even though it is not stored in the checkout's config"
+      assert preview["preview_account_tag"] == "acct-1",
+             "cloudflared's credentials file names the account, so a copy without it " <>
+               "holds a tunnel it cannot run"
     end
   end
 

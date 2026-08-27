@@ -79,13 +79,70 @@ defmodule ClientUtils.Harness.Preview do
   # served by a daemon holding the project's key in its environment.
   def ensure(_server_url, _working_copy_id, _deploy_key, _opts), do: :none
 
+  @doc """
+  What a checkout's `.cms_harness.json` says about its preview, as application
+  config.
+
+  For a generated application's `config/runtime.exs`, which is where the tunnel's
+  options have to come from: onboarding writes the file, and the app reads it at
+  boot rather than being handed the values by whoever started it.
+
+  Empty when there is no preview, no file, or nothing readable — and empty is
+  what leaves the tunnel disabled, so an app with no preview starts normally
+  instead of dialling a tunnel that does not exist.
+
+  `embedder` is derived rather than stored. It is the origin allowed to frame
+  this app, which is the site that issued the preview — not the preview address
+  itself, which is this app.
+  """
+  @spec from_checkout(String.t(), keyword()) :: keyword()
+  def from_checkout(root, opts \\ []) do
+    case read_config(root) do
+      %{"preview_tunnel_id" => id} = config when is_binary(id) and id != "" ->
+        [
+          hostname: host_of(config["preview_url"]),
+          tunnel_id: id,
+          account_tag: config["preview_account_tag"],
+          tunnel_secret: config["preview_tunnel_secret"],
+          origin_url: Keyword.get(opts, :origin_url, "http://127.0.0.1:4000"),
+          embedder: Keyword.get(opts, :embedder, default_embedder())
+        ]
+
+      _ ->
+        []
+    end
+  end
+
+  defp read_config(root) do
+    with {:ok, contents} <- File.read(Path.join(Path.expand(root), ".cms_harness.json")),
+         {:ok, %{} = config} <- Jason.decode(contents) do
+      config
+    else
+      _ -> %{}
+    end
+  end
+
+  # A CSP source is a scheme and a host; a path in one matches nothing.
+  defp host_of(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{host: host} when is_binary(host) and host != "" -> host
+      _ -> nil
+    end
+  end
+
+  defp host_of(_url), do: nil
+
+  defp default_embedder do
+    System.get_env("CMS_PREVIEW_EMBEDDER") || "https://codemyspec.com"
+  end
+
   defp interpret({:ok, %{status: 200, body: %{} = body}}) do
     {:ok,
      %{
        "preview_url" => body["preview_url"],
        "preview_tunnel_id" => body["tunnel_id"],
        "preview_tunnel_secret" => body["tunnel_secret"],
-       "account_tag" => body["account_tag"]
+       "preview_account_tag" => body["account_tag"]
      }}
   end
 
