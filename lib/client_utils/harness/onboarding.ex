@@ -325,10 +325,25 @@ defmodule ClientUtils.Harness.Onboarding do
     relay_model_turns? = Keyword.get(opts, :relay_model_turns, false)
     partition = partition_name(root)
 
+    deploy_key = Keyword.get(opts, :deploy_key)
+
     {settings, effective_id} =
       write_settings(io, root, harness_id, partition, base_url, relay_model_turns?)
 
-    hooks = write_harness_config(io, root, effective_id, Keyword.get(opts, :deploy_key))
+    # Asked for before the config is written, so it lands in the same merge
+    # rather than a second write over the top of it. `:none` is the ordinary
+    # answer — every worktree gets it — and it leaves the file untouched, which
+    # is what keeps re-onboarding a worktree from blanking an address a main
+    # checkout wrote earlier in the same tree.
+    preview =
+      ClientUtils.Harness.Preview.ensure(
+        Keyword.get(opts, :server_url),
+        effective_id,
+        deploy_key,
+        req_options: Keyword.get(opts, :req_options, [])
+      )
+
+    hooks = write_harness_config(io, root, effective_id, deploy_key, preview)
 
     %{
       root: root,
@@ -336,6 +351,7 @@ defmodule ClientUtils.Harness.Onboarding do
       partition: partition,
       settings: settings,
       hooks: hooks,
+      preview: preview_report(preview),
       databases: databases(partition, app),
       git: %{submodule_recurse: configure_git(io, root)},
       issued_ddl: false
@@ -505,7 +521,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # not a match to the relay's own walk (it keeps walking up), so it would sit
   # there looking like configuration while doing nothing but inviting someone
   # to trust it.
-  defp write_harness_config(_io, _root, nil, _deploy_key), do: {:ok, :skipped}
+  defp write_harness_config(_io, _root, nil, _deploy_key, _preview), do: {:ok, :skipped}
 
   # Merged, never stamped — the same rule this module already applies to
   # `settings.local.json`, applied to the other file it owns.
@@ -520,7 +536,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # So the keys this run has an answer for are set, and every other key already
   # in the file is kept. A library that writes a key it has no value for is a
   # library that erases its caller's.
-  defp write_harness_config(io, root, harness_id, deploy_key) do
+  defp write_harness_config(io, root, harness_id, deploy_key, preview) do
     existing =
       case Port.read(io, root, harness_config_path()) do
         {:ok, contents} ->
@@ -539,6 +555,7 @@ defmodule ClientUtils.Harness.Onboarding do
       |> Map.put("root", root)
       |> Map.put_new("project_id", nil)
       |> put_deploy_key(deploy_key)
+      |> put_preview(preview)
       |> Jason.encode!(pretty: true)
 
     case Port.write(io, root, harness_config_path(), contents) do
@@ -562,6 +579,32 @@ defmodule ClientUtils.Harness.Onboarding do
     do: Map.put(config, "deploy_key", key)
 
   defp put_deploy_key(config, _key), do: config
+
+  # Same rule as the key above: set what this run has an answer for, keep
+  # everything else. A refused ask leaves any address already recorded exactly
+  # where it was — re-onboarding a worktree must not blank the preview its main
+  # checkout wrote into the same tree.
+  #
+  # `account_tag` comes back on every ask and is deliberately not stored. It
+  # names the Cloudflare account the tunnel lives in, it is identical for every
+  # checkout of every project, and nothing in the copy reads it — writing it
+  # would put a detail of our infrastructure in every customer's working
+  # directory for no reader.
+  defp put_preview(config, {:ok, preview}) do
+    preview
+    |> Map.take(["preview_url", "preview_tunnel_id", "preview_tunnel_secret"])
+    |> Enum.reduce(config, fn
+      {_key, value}, acc when value in [nil, ""] -> acc
+      {key, value}, acc -> Map.put(acc, key, value)
+    end)
+  end
+
+  defp put_preview(config, _preview), do: config
+
+  defp preview_report({:ok, %{"preview_url" => url}}) when is_binary(url) and url != "",
+    do: %{address: url}
+
+  defp preview_report(_preview), do: :none
 
   # The address is corrected on every run *that has one to give* — a run with
   # no harness id carries neither key in `incoming` (see `address/2`) and must

@@ -47,6 +47,14 @@ defmodule ClientUtils.MixProject do
   defp deps do
     [
       {:jason, "~> 1.0"},
+      # Onboarding asks the server for this copy's preview address. Creating the
+      # tunnel behind it needs a Cloudflare credential that must never ship in a
+      # generated application, so the server does that and this asks.
+      #
+      # Free for the applications that consume this: `phx.new` has put
+      # `{:req, "~> 0.5"}` in every generated mix.exs since 1.7, so it is already
+      # resolved wherever this runs.
+      {:req, "~> 0.5"},
       {:logger_file_backend, "~> 0.0.14"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
