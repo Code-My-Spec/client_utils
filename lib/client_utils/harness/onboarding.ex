@@ -335,11 +335,22 @@ defmodule ClientUtils.Harness.Onboarding do
     # answer — every worktree gets it — and it leaves the file untouched, which
     # is what keeps re-onboarding a worktree from blanking an address a main
     # checkout wrote earlier in the same tree.
+    # The key falls back to the one this copy already recorded. `--deploy-key`
+    # is documented as optional and as never blanking a key already in the file,
+    # so omitting it on a re-run is the normal thing to do -- and doing the
+    # normal thing left `Preview.ensure/4` holding a nil key, which is one of
+    # the two arguments that make it answer `:none` without asking anything.
+    #
+    # That is how four onboard runs in one night reported success and wrote no
+    # preview keys. Passing `--server-url` fixed the other argument and changed
+    # nothing, because this one was still nil.
+    preview_key = deploy_key || recorded_deploy_key(io, root)
+
     preview =
       ClientUtils.Harness.Preview.ensure(
         Keyword.get(opts, :server_url),
         effective_id,
-        deploy_key,
+        preview_key,
         req_options: Keyword.get(opts, :req_options, [])
       )
 
@@ -351,7 +362,7 @@ defmodule ClientUtils.Harness.Onboarding do
       partition: partition,
       settings: settings,
       hooks: hooks,
-      preview: preview_report(preview),
+      preview: preview_report(preview, Keyword.get(opts, :server_url), preview_key),
       databases: databases(partition, app),
       git: %{submodule_recurse: configure_git(io, root)},
       issued_ddl: false
@@ -608,10 +619,45 @@ defmodule ClientUtils.Harness.Onboarding do
 
   defp put_preview(config, _preview), do: config
 
-  defp preview_report({:ok, %{"preview_url" => url}}) when is_binary(url) and url != "",
-    do: %{address: url}
+  # The key this copy already recorded, for a run that was not given one.
+  #
+  # The file is already where a working copy says what it is, and onboarding
+  # already reads it in order to merge. Reading the key back out is the same
+  # act, and it is the only place the key reliably is: a person re-onboarding
+  # their own checkout has it on disk and almost never in their environment.
+  defp recorded_deploy_key(io, root) do
+    with {:ok, contents} <- Port.read(io, root, harness_config_path()),
+         {:ok, %{"deploy_key" => key}} <- Jason.decode(contents),
+         true <- is_binary(key) and key != "" do
+      key
+    else
+      _ -> nil
+    end
+  end
 
-  defp preview_report(_preview), do: :none
+  defp preview_report({:ok, %{"preview_url" => url}}, _server_url, _key)
+       when is_binary(url) and url != "",
+       do: %{address: url}
+
+  # Why there is no address, rather than the absence of one.
+  #
+  # Every outcome used to collapse to `:none`, so a checkout that asked and was
+  # refused looked exactly like a worktree that correctly never asked. Four
+  # onboard runs in one night reported success, wrote nothing, and gave nobody a
+  # thread to pull; two people spent the night on the wrong two hypotheses.
+  #
+  # `Preview.ensure/4` logs its own refusals, so this does not repeat them. What
+  # it adds is the case that produces no log at all, because nothing was sent:
+  # an argument was missing and the request never happened.
+  defp preview_report(_preview, server_url, _key)
+       when not is_binary(server_url) or server_url == "",
+       do: %{skipped: "no server to ask — pass --server-url or set CMS_SERVER_URL"}
+
+  defp preview_report(_preview, _server_url, key) when not is_binary(key) or key == "",
+    do: %{skipped: "no deploy key — pass --deploy-key or record one in .cms_harness.json"}
+
+  defp preview_report(_preview, _server_url, _key),
+    do: %{skipped: "the server gave no address for this checkout — see the log above"}
 
   # The address is corrected on every run *that has one to give* — a run with
   # no harness id carries neither key in `incoming` (see `address/2`) and must
