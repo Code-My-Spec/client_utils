@@ -74,7 +74,8 @@ defmodule Mix.Tasks.Harness.Onboard do
           check: :boolean,
           id: :string,
           relay_model_turns: :boolean,
-          deploy_key: :string
+          deploy_key: :string,
+          server_url: :string
         ]
       )
 
@@ -105,8 +106,26 @@ defmodule Mix.Tasks.Harness.Onboard do
       harness_id: Keyword.get(opts, :id),
       app: Mix.Project.config()[:app],
       relay_model_turns: Keyword.get(opts, :relay_model_turns, false),
-      deploy_key: deploy_key(opts)
+      deploy_key: deploy_key(opts),
+      server_url: server_url(opts)
     ]
+  end
+
+  # Where to ask for this copy's preview.
+  #
+  # Without it `Preview.ensure/4` has no server to ask and answers `:none`, so
+  # onboarding recorded no address — every time, silently, because "no preview"
+  # is a legitimate answer and looks identical to "never asked". The tunnel is
+  # supposed to be a *result* of onboarding a copy, and it could not be.
+  #
+  # Flag first, then the environment, matching `deploy_key/1`. A container is
+  # handed `CMS_SERVER_URL` by whatever started it; a person running this by
+  # hand passes the flag or has it exported already.
+  defp server_url(opts) do
+    case Keyword.get(opts, :server_url) do
+      url when is_binary(url) and url != "" -> url
+      _ -> System.get_env("CMS_SERVER_URL")
+    end
   end
 
   defp root_or_cwd(nil), do: File.cwd!()
