@@ -68,6 +68,18 @@ defmodule Mix.Tasks.Harness.Onboard do
 
   @impl Mix.Task
   def run(args) do
+    # `:req` and nothing else. Onboarding asks the server for this copy's
+    # preview, which is one HTTP call, and this task runs in checkouts that have
+    # never been started — `app.start` would boot the whole application and fail
+    # on a database a fresh copy does not have yet.
+    #
+    # Without it the call reaches Finch before its pool registry exists and dies
+    # as `unknown registry: Req.Finch`, which reads like a missing dependency
+    # rather than a task that forgot to start one. CodeMySpec's own onboarding
+    # task carries the same line for the same reason; this one did not need it
+    # until it started asking for a preview.
+    {:ok, _} = Application.ensure_all_started(:req)
+
     {opts, rest, _invalid} =
       OptionParser.parse(args,
         strict: [
