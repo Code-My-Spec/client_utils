@@ -112,4 +112,69 @@ defmodule ClientUtils.CloudflareTunnelTest do
       end
     end
   end
+
+  describe "terminate/2" do
+    @moduledoc """
+    Reported by the agent working in broken_oaths, 2026-08-28: killing the app
+    left cloudflared running and still serving.
+
+    `Port.close/1` shuts the port's stdin, which ends a child that reads stdin.
+    cloudflared does not, so it outlived every restart. For a named tunnel the
+    orphan keeps its connections registered and Cloudflare goes on routing to
+    it, so a share of requests are answered by a tunnel whose origin is gone.
+
+    Tested with `sleep` rather than cloudflared: the mechanism under test is
+    "does the OS process die", and depending on cloudflared being installed
+    would make this a test that silently skips on the machines most likely to
+    regress it.
+    """
+
+    test "kills the OS process, not just the port" do
+      port =
+        Port.open({:spawn_executable, System.find_executable("sleep")},
+          args: ["60"]
+        )
+
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+
+      assert alive?(os_pid), "the probe never started; nothing was proven either way"
+
+      CloudflareTunnel.terminate(:shutdown, %{port: port})
+
+      refute eventually_dead?(os_pid),
+             "cloudflared (pid #{os_pid}) outlived the app that started it. " <>
+               "Closing the port is not enough -- it shuts stdin, and cloudflared " <>
+               "never reads stdin, so it goes on serving a dead origin."
+    end
+
+    test "survives a state with no live port" do
+      port = Port.open({:spawn_executable, System.find_executable("sleep")}, args: ["60"])
+      {:os_pid, os_pid} = Port.info(port, :os_pid)
+      Port.close(port)
+      System.cmd("kill", ["-KILL", to_string(os_pid)], stderr_to_stdout: true)
+
+      # A port already gone must not crash the shutdown path: terminate/2 runs
+      # while things are being torn down, and raising here would skip whatever
+      # cleanup came after it.
+      assert CloudflareTunnel.terminate(:shutdown, %{port: port}) == :ok
+    end
+  end
+
+  defp alive?(os_pid) do
+    {_out, status} = System.cmd("kill", ["-0", to_string(os_pid)], stderr_to_stdout: true)
+    status == 0
+  end
+
+  # SIGTERM is delivered asynchronously, so this waits rather than asserting on
+  # the instant after. Returns true only if it is still alive at the deadline.
+  defp eventually_dead?(os_pid, attempts \\ 50) do
+    Enum.reduce_while(1..attempts, true, fn _, _ ->
+      if alive?(os_pid) do
+        Process.sleep(20)
+        {:cont, true}
+      else
+        {:halt, false}
+      end
+    end)
+  end
 end

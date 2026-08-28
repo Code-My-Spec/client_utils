@@ -85,6 +85,18 @@ defmodule ClientUtils.CloudflareTunnel do
 
   @impl true
   def init(opts) do
+    # Trapping exits so `terminate/2` runs on a supervisor shutdown. Without it
+    # the callback is skipped entirely and cloudflared is orphaned: the BEAM
+    # closes the port, cloudflared never reads stdin so it never notices, and it
+    # goes on serving after the app that started it is gone.
+    #
+    # For a named tunnel that is worse than a leak. The orphan keeps its
+    # connections registered, so Cloudflare load-balances across it and the new
+    # instance both, and a share of every request is answered by a tunnel whose
+    # origin is dead. Restart twice and most of your preview is served by
+    # processes nobody knows are running.
+    Process.flag(:trap_exit, true)
+
     if Keyword.get(opts, :enabled, true) == false do
       Logger.info("[CloudflareTunnel] Tunnel disabled via :enabled option")
       :ignore
@@ -204,8 +216,46 @@ defmodule ClientUtils.CloudflareTunnel do
     {:stop, {:tunnel_exit, status}, state}
   end
 
+  # Arrives because we trap exits. Both are shutdown paths, not faults: the
+  # first is the port going away, the second is the supervisor asking us to
+  # stop. Neither is an error to report, and without these clauses the
+  # GenServer dies of a FunctionClauseError on its way out -- which skips
+  # `terminate/2` and orphans the very process the trap was added to reap.
+  def handle_info({:EXIT, port, _reason}, %{port: port} = state) do
+    {:stop, :normal, state}
+  end
+
+  def handle_info({:EXIT, _pid, reason}, state) do
+    {:stop, reason, state}
+  end
+
+  # Anything else is not worth dying for.
+  def handle_info(_message, state), do: {:noreply, state}
+
+  # Kill the OS process, then close the port -- in that order, because
+  # `Port.info/2` stops answering once the port is closed and the pid is the one
+  # thing we cannot recover afterwards.
+  #
+  # `Port.close/1` alone does not end cloudflared. Closing a port shuts its
+  # stdin, which is enough for a child that reads stdin; cloudflared does not,
+  # so it survives its parent indefinitely.
+  #
+  # SIGTERM rather than SIGKILL: cloudflared unregisters its connections on
+  # SIGTERM, so Cloudflare stops routing to it immediately instead of waiting
+  # out a health check. Nothing in-process can help if the BEAM itself is
+  # SIGKILLed -- that orphan is unavoidable and is why `cms.new`'s template
+  # names the tunnel deterministically rather than trusting what is running.
   @impl true
   def terminate(_reason, %{port: port}) do
+    case Port.info(port, :os_pid) do
+      {:os_pid, os_pid} ->
+        Logger.info("[CloudflareTunnel] Stopping cloudflared (pid #{os_pid})")
+        System.cmd("kill", ["-TERM", to_string(os_pid)], stderr_to_stdout: true)
+
+      nil ->
+        :ok
+    end
+
     Port.close(port)
   catch
     :error, :badarg -> :ok
