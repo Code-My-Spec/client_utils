@@ -315,6 +315,24 @@ defmodule ClientUtils.Harness.Onboarding do
   Omitting it is not an error and never blanks a key already recorded: a copy
   served by a daemon that holds this project's key in its environment — a sprite
   — needs nothing here.
+
+  ## `server_url:`
+
+  Which CodeMySpec issued this copy's harness id, recorded into
+  `.cms_harness.json` beside it.
+
+  An id means nothing to a server that did not mint it, and nothing else can say
+  which one did: every way of resolving "the server" answers with the build
+  doing the *reading*. So a copy onboarded by one build and served by another —
+  a sibling repo onboarded from a dev checkout, a generated app onboarded by its
+  own release — had no way to name where it belonged, and its hooks came back
+  "No harness with id …", which reads like a deleted row rather than two servers
+  that never shared one.
+
+  Distinct from `base_url:`, which is the *harness* this copy's hooks post to
+  (`localhost:4004`). This is the CodeMySpec the harness itself talks to.
+
+  Omitting it keeps whatever is recorded, same as the key above.
   """
   @spec onboard(String.t(), keyword()) :: map()
   def onboard(root, opts \\ []) do
@@ -326,6 +344,7 @@ defmodule ClientUtils.Harness.Onboarding do
     partition = partition_name(root)
 
     deploy_key = Keyword.get(opts, :deploy_key)
+    server_url = Keyword.get(opts, :server_url)
 
     {settings, effective_id} =
       write_settings(io, root, harness_id, partition, base_url, relay_model_turns?)
@@ -354,7 +373,7 @@ defmodule ClientUtils.Harness.Onboarding do
         req_options: Keyword.get(opts, :req_options, [])
       )
 
-    hooks = write_harness_config(io, root, effective_id, deploy_key, preview)
+    hooks = write_harness_config(io, root, effective_id, deploy_key, preview, server_url)
 
     %{
       root: root,
@@ -532,7 +551,8 @@ defmodule ClientUtils.Harness.Onboarding do
   # not a match to the relay's own walk (it keeps walking up), so it would sit
   # there looking like configuration while doing nothing but inviting someone
   # to trust it.
-  defp write_harness_config(_io, _root, nil, _deploy_key, _preview), do: {:ok, :skipped}
+  defp write_harness_config(_io, _root, nil, _deploy_key, _preview, _server_url),
+    do: {:ok, :skipped}
 
   # Merged, never stamped — the same rule this module already applies to
   # `settings.local.json`, applied to the other file it owns.
@@ -547,7 +567,7 @@ defmodule ClientUtils.Harness.Onboarding do
   # So the keys this run has an answer for are set, and every other key already
   # in the file is kept. A library that writes a key it has no value for is a
   # library that erases its caller's.
-  defp write_harness_config(io, root, harness_id, deploy_key, preview) do
+  defp write_harness_config(io, root, harness_id, deploy_key, preview, server_url) do
     existing =
       case Port.read(io, root, harness_config_path()) do
         {:ok, contents} ->
@@ -567,6 +587,7 @@ defmodule ClientUtils.Harness.Onboarding do
       |> Map.put_new("project_id", nil)
       |> put_deploy_key(deploy_key)
       |> put_preview(preview)
+      |> put_server_url(server_url)
       |> Jason.encode!(pretty: true)
 
     case Port.write(io, root, harness_config_path(), contents) do
@@ -590,6 +611,20 @@ defmodule ClientUtils.Harness.Onboarding do
     do: Map.put(config, "deploy_key", key)
 
   defp put_deploy_key(config, _key), do: config
+
+  # Which CodeMySpec issued this copy's id. Same rule again: set it when this run
+  # knows, keep what is there when it does not.
+  #
+  # A harness id is only meaningful to the server that minted it, and nothing
+  # else can say which that was — every way of resolving "the server" answers
+  # with the build doing the *reading*, so a copy onboarded by one build and
+  # served by another had no way to name where it belonged. Its hooks then 404
+  # with "No harness with id …", which reads like a deleted row rather than two
+  # servers that never shared one.
+  defp put_server_url(config, url) when is_binary(url) and url != "",
+    do: Map.put(config, "server_url", url)
+
+  defp put_server_url(config, _url), do: config
 
   # Same rule as the key above: set what this run has an answer for, keep
   # everything else. A refused ask leaves any address already recorded exactly
