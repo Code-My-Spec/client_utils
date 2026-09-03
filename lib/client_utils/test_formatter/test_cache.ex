@@ -21,6 +21,24 @@ defmodule ClientUtils.TestFormatter.TestCache do
   # `config :client_utils, :max_test_runs, N`.
   @max_runs 100
 
+  # Caps the file's size on disk, which the run cap above does not.
+  #
+  # `@max_runs` bounds how many runs are retained and says nothing about how big
+  # one is. A run carries one entry per test event, each a base64-encoded Erlang
+  # term, so a large suite makes a large run and the count cap lets a hundred of
+  # them through. Observed at 49 MB in one working copy and 5.8 MB in another on
+  # 2026-09-03, on a machine that then filled its disk — which took Postgres
+  # down, left the server answering 500, and dropped every harness channel. The
+  # stop hook reported a connection problem, because that is the layer it can
+  # see.
+  #
+  # Override via `config :client_utils, :max_test_events_bytes, N`.
+  @max_bytes 100 * 1024 * 1024
+
+  # `{"runs":[]}` — counted so the budget is the size of the file rather than of
+  # its contents.
+  @envelope_bytes 11
+
   @doc """
   Returns the events file path.
   Uses the configured :agent_test_dir, or can be overridden via AGENT_TEST_EVENTS_FILE environment variable.
@@ -212,8 +230,59 @@ defmodule ClientUtils.TestFormatter.TestCache do
     file = events_file()
     dir = Path.dirname(file)
 
+    # Enforced here rather than in `store_events/3` so it holds for every caller
+    # and every path into this file: past this point it physically cannot exceed
+    # the budget.
+    max_bytes = Application.get_env(:client_utils, :max_test_events_bytes, @max_bytes)
+    data = %{data | "runs" => trim_to_budget(data["runs"] || [], max_bytes)}
+
     File.mkdir_p!(dir)
     File.write!(file, Jason.encode!(data))
+  end
+
+  # Newest runs win, for the same reason the count cap keeps the tail: the
+  # question this file answers is "was X tested recently", so the oldest run is
+  # always the one worth losing.
+  #
+  # Each run is sized once rather than re-encoding the whole file after every
+  # drop, which would be quadratic in the number of runs — and this runs at the
+  # end of every test suite.
+  defp trim_to_budget(runs, max_bytes) do
+    runs
+    |> Enum.reverse()
+    |> Enum.reduce_while({[], @envelope_bytes}, fn run, {kept, total} ->
+      # +1 for the comma this run adds to the array.
+      size = byte_size(Jason.encode!(run)) + 1
+
+      cond do
+        # The newest run alone is over budget. Nothing else can be kept either,
+        # so stop here rather than walking the rest.
+        kept == [] and total + size > max_bytes ->
+          {:halt, {[drop_events(run)], total}}
+
+        total + size > max_bytes ->
+          {:halt, {kept, total}}
+
+        true ->
+          {:cont, {[run | kept], total + size}}
+      end
+    end)
+    |> elem(0)
+  end
+
+  # A single run bigger than the whole budget. Its events cannot be kept; the
+  # run is, because dropping the record outright would leave no trace a suite
+  # ran at all, and `file_tested_after?/2` cannot tell "this run was discarded"
+  # from "this run never happened".
+  #
+  # The consequence is deliberate: every file in a dropped run reads as
+  # untested, so a stop hook blocks rather than allowing on evidence that no
+  # longer exists. Failing toward "prove it again" is the safe direction, and
+  # `events_dropped` is there so anyone reading the file can see why.
+  defp drop_events(run) do
+    run
+    |> Map.put("events", [])
+    |> Map.put("events_dropped", true)
   end
 
   defp ensure_structure(data) do

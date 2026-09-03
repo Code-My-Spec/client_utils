@@ -175,6 +175,96 @@ defmodule ClientUtils.TestFormatter.TestCacheTest do
     end
   end
 
+  describe "store_events/2 size cap (max_test_events_bytes)" do
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:client_utils, :max_test_events_bytes)
+        Application.delete_env(:client_utils, :max_test_runs)
+      end)
+
+      :ok
+    end
+
+    # One event per test, base64-encoded, so a run's size is the suite's size.
+    defp fat_run(file, event_count) do
+      padding = String.duplicate("x", 2_000)
+
+      for _ <- 1..event_count do
+        {:test_finished, %{tags: %{file: file}, padding: padding}}
+      end
+    end
+
+    test "the file never exceeds the budget, however many runs are stored" do
+      Application.put_env(:client_utils, :max_test_events_bytes, 200_000)
+
+      for i <- 1..12 do
+        TestCache.store_events(fat_run("/path/to/run_#{i}.exs", 20))
+      end
+
+      %{size: size} = File.stat!(TestCache.events_file())
+
+      assert size <= 200_000, """
+      The events file is #{size} bytes against a 200_000 byte budget. The run
+      cap bounds how many runs are kept and not how big they are, which is how
+      this file reached 49 MB and filled a disk.
+      """
+    end
+
+    test "the newest run survives and the oldest is dropped" do
+      Application.put_env(:client_utils, :max_test_events_bytes, 200_000)
+
+      for i <- 1..12 do
+        TestCache.store_events(fat_run("/path/to/run_#{i}.exs", 20))
+      end
+
+      long_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      assert TestCache.file_tested_after?("/path/to/run_12.exs", long_ago),
+             "the newest run was dropped; the cap must always keep the tail"
+
+      refute TestCache.file_tested_after?("/path/to/run_1.exs", long_ago),
+             "the oldest run survived a budget that cannot hold every run"
+    end
+
+    test "a single run larger than the whole budget is kept without its events" do
+      Application.put_env(:client_utils, :max_test_events_bytes, 20_000)
+
+      TestCache.store_events(fat_run("/path/to/enormous.exs", 200))
+
+      %{size: size} = File.stat!(TestCache.events_file())
+
+      assert size <= 20_000,
+             "one oversized run wrote #{size} bytes past a 20_000 byte budget"
+
+      {:ok, data} = TestCache.events_file() |> File.read!() |> Jason.decode()
+
+      assert [run] = data["runs"],
+             "the run itself must survive, or a discarded run is indistinguishable from one that never happened"
+
+      assert run["events"] == []
+      assert run["events_dropped"] == true
+
+      long_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      refute TestCache.file_tested_after?("/path/to/enormous.exs", long_ago),
+             "a file whose events were dropped must read as untested, so callers block rather than trust evidence that is gone"
+    end
+
+    test "an ordinary run is untouched by the cap" do
+      Application.put_env(:client_utils, :max_test_events_bytes, 100 * 1024 * 1024)
+
+      TestCache.store_events([{:test_finished, %{tags: %{file: "/path/to/small.exs"}}}])
+
+      long_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
+
+      assert TestCache.file_tested_after?("/path/to/small.exs", long_ago),
+             "the cap must not touch a file that is nowhere near it"
+
+      {:ok, data} = TestCache.events_file() |> File.read!() |> Jason.decode()
+      refute Map.has_key?(hd(data["runs"]), "events_dropped")
+    end
+  end
+
   describe "clear/0" do
     test "removes all cached events" do
       file = "/path/to/test.exs"
