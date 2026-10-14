@@ -98,36 +98,45 @@ defmodule ClientUtils.TestFormatter.TestCache do
   end
 
   @doc """
-  Gets all events for a file that were recorded after the given time.
+  Gets this file's events from its latest run completed after the given time.
+  A later run supersedes earlier outcomes without suppressing current failures.
   """
   def get_events_for_file(file, after_time) do
-    data = read_events_file()
-    after_timestamp = to_unix(after_time)
-
-    data["runs"]
-    |> Enum.filter(fn run ->
-      run_timestamp = run["completed_at"] |> parse_iso8601() |> to_unix()
-      run_timestamp > after_timestamp
-    end)
-    |> Enum.flat_map(fn run -> run["events"] end)
-    |> Enum.filter(fn %{"file" => f} -> f == file end)
-    |> Enum.map(fn %{"event" => encoded} -> decode_event(encoded) end)
+    after_time
+    |> latest_events_by_file()
+    |> Map.get(file, [])
+    |> decode_events()
   end
 
   @doc """
-  Gets all events from runs completed after the given time.
+  Gets each file's latest run events completed after the given time.
+  Running one file again does not discard other files' latest results.
   """
   def get_events_after(after_time) do
-    data = read_events_file()
+    after_time
+    |> latest_events_by_file()
+    |> Enum.sort_by(fn {file, _events} -> file end)
+    |> Enum.flat_map(fn {_file, events} -> events end)
+    |> decode_events()
+  end
+
+  defp latest_events_by_file(after_time) do
     after_timestamp = to_unix(after_time)
 
-    data["runs"]
-    |> Enum.filter(fn run ->
-      run_timestamp = run["completed_at"] |> parse_iso8601() |> to_unix()
-      run_timestamp > after_timestamp
+    read_events_file()["runs"]
+    |> Enum.with_index()
+    |> Enum.map(fn {run, index} ->
+      {run, run["completed_at"] |> parse_iso8601() |> to_unix(), index}
     end)
-    |> Enum.flat_map(fn run -> run["events"] end)
-    |> Enum.map(fn %{"event" => encoded} -> decode_event(encoded) end)
+    |> Enum.filter(fn {_run, timestamp, _index} -> timestamp > after_timestamp end)
+    |> Enum.sort_by(fn {_run, timestamp, index} -> {timestamp, index} end)
+    |> Enum.reduce(%{}, fn {run, _timestamp, _index}, files ->
+      Map.merge(files, Enum.group_by(run["events"], & &1["file"]))
+    end)
+  end
+
+  defp decode_events(events) do
+    Enum.map(events, fn %{"event" => encoded} -> decode_event(encoded) end)
   end
 
   @doc """
