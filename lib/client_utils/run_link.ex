@@ -17,17 +17,29 @@ defmodule ClientUtils.RunLink do
 
   @type t :: %__MODULE__{harness: node(), listener: atom(), run_id: integer()}
 
+  # The variables that made this BEAM the run's node are for it alone: a test
+  # that shells out to `mix` would otherwise boot a child under the same node
+  # name ("the name cms_run_… seems to be in use by another Erlang node").
+  # Read once, then removed before any test runs.
+  @run_env ~w(ELIXIR_ERL_OPTIONS CMS_HARNESS_NODE CMS_HARNESS_COOKIE CMS_RUN_ID CMS_RUN_LISTENER)
+
   @doc """
   Join the harness named in the environment, or `nil` when none is named.
   A harness that is named but cannot be reached halts the run before any test.
   """
   @spec join() :: t() | nil
   def join do
-    case System.get_env("CMS_HARNESS_NODE") do
+    harness = System.get_env("CMS_HARNESS_NODE")
+    run_env = for name <- @run_env, value = System.get_env(name), into: %{}, do: {name, value}
+    forget_run_env()
+
+    case harness do
       blank when blank in [nil, ""] -> nil
-      harness -> join(String.to_atom(harness))
+      harness -> join(String.to_atom(harness), run_env)
     end
   end
+
+  defp forget_run_env, do: Enum.each(@run_env, &System.delete_env/1)
 
   # The run's BEAM is distributed from boot by the harness (`ELIXIR_ERL_OPTIONS`).
   # Distribution is never started here: `mix test` is still requiring test
@@ -40,9 +52,9 @@ defmodule ClientUtils.RunLink do
   # globally (`Mox.Server`, Swoosh's storage) would collide across runs: one
   # run's Mox calls landed in another's server (`badfun`). A harness that starts
   # runs visible gets a plain `mix test`.
-  defp join(harness) do
+  defp join(harness, run_env) do
     if Node.alive?() and hidden?() do
-      link(harness)
+      link(harness, run_env)
     else
       IO.puts(:stderr, "CodeMySpec: this run's BEAM is not a hidden node; not reporting live.")
       nil
@@ -51,9 +63,9 @@ defmodule ClientUtils.RunLink do
 
   defp hidden?, do: match?({:ok, _}, :init.get_argument(:hidden))
 
-  defp link(harness) do
-    run_id = String.to_integer(System.fetch_env!("CMS_RUN_ID"))
-    listener = String.to_atom(System.get_env("CMS_RUN_LISTENER") || @default_listener)
+  defp link(harness, run_env) do
+    run_id = String.to_integer(Map.fetch!(run_env, "CMS_RUN_ID"))
+    listener = String.to_atom(Map.get(run_env, "CMS_RUN_LISTENER", @default_listener))
 
     with true <- Node.connect(harness),
          true <- listening?(harness, listener) do
