@@ -28,11 +28,23 @@ defmodule ClientUtils.RunLink do
     end
   end
 
+  # The run's BEAM is distributed from boot by the harness (`ELIXIR_ERL_OPTIONS`).
+  # Distribution is never started here: `mix test` is still requiring test
+  # files in parallel, and a process minted as `nonode@nohost` reads as a
+  # foreign pid once the node gets a name. A BEAM that is not distributed —
+  # a harness too old to name it — runs as a plain `mix test`.
   defp join(harness) do
+    if Node.alive?() do
+      link(harness)
+    else
+      IO.puts(:stderr, "CodeMySpec: this run's BEAM is not distributed; not reporting live.")
+      nil
+    end
+  end
+
+  defp link(harness) do
     run_id = String.to_integer(System.fetch_env!("CMS_RUN_ID"))
     listener = String.to_atom(System.get_env("CMS_RUN_LISTENER") || @default_listener)
-    :ok = start_distribution(run_id)
-    Node.set_cookie(String.to_atom(System.fetch_env!("CMS_HARNESS_COOKIE")))
 
     if Node.connect(harness) == true and listening?(harness, listener) do
       watch(harness, listener)
@@ -51,19 +63,6 @@ defmodule ClientUtils.RunLink do
   def report(%__MODULE__{harness: harness, listener: listener, run_id: run_id}, event) do
     send({listener, harness}, {:run_event, run_id, event})
     :ok
-  end
-
-  defp start_distribution(run_id) do
-    if Node.alive?() do
-      :ok
-    else
-      name = :"cms_run_#{run_id}_#{System.unique_integer([:positive])}@127.0.0.1"
-
-      case Node.start(name, :longnames) do
-        {:ok, _pid} -> :ok
-        {:error, {:already_started, _pid}} -> :ok
-      end
-    end
   end
 
   defp listening?(harness, listener),
