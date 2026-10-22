@@ -48,9 +48,8 @@ defmodule ClientUtils.RunLink do
     listener = String.to_atom(System.get_env("CMS_RUN_LISTENER") || @default_listener)
 
     with true <- Node.connect(harness),
-         true <- listening?(harness, listener),
-         owner when is_pid(owner) <- owner(run_id) do
-      watch(owner)
+         true <- listening?(harness, listener) do
+      watch(owner(run_id) || {listener, harness})
       %__MODULE__{harness: harness, listener: listener, run_id: run_id}
     else
       _ ->
@@ -59,7 +58,9 @@ defmodule ClientUtils.RunLink do
     end
   end
 
-  # The harness process that owns this run, registered as `{:cms_run, id}`.
+  # The harness process that owns this run, registered as `{:cms_run, id}`. A
+  # harness that registers none (one older than its client_utils, which as a
+  # path dependency updates first) is watched through its listener instead.
   defp owner(run_id) do
     :global.sync()
 
