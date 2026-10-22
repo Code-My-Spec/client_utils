@@ -15,6 +15,7 @@ defmodule ClientUtils.TestFormatter do
 
   def init(opts) do
     output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
+    remove_legacy_queue_files()
 
     # Start CLIFormatter for normal terminal output
     # CLIFormatter expects specific config keys with defaults
@@ -140,6 +141,17 @@ defmodule ClientUtils.TestFormatter do
   end
 
   # Private functions
+
+  # What 0.1's `mix agent_test` and its event cache left in a project. Runs are
+  # queued by CodeMySpec now, so a project upgraded from 0.1 drops them.
+  @legacy_queue_files [
+    ".code_my_spec/internal/agent_test_events.json",
+    ".code_my_spec/internal/agent_test.lock.json",
+    ".code_my_spec/internal/agent_test.log",
+    ".code_my_spec/internal/callers"
+  ]
+
+  defp remove_legacy_queue_files, do: Enum.each(@legacy_queue_files, &File.rm_rf/1)
 
   defp flush_results(state, run_us, load_us) do
     # The file write is best-effort — never crash the formatter

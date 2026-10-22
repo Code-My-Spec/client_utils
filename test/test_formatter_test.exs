@@ -100,6 +100,19 @@ defmodule ClientUtils.TestFormatterTest do
   end
 
   describe "TestFormatter.init/1" do
+    @tag :tmp_dir
+    test "removes the queue and cache files 0.1 left in the project", %{tmp_dir: dir} do
+      internal = Path.join(dir, ".code_my_spec/internal")
+      File.mkdir_p!(Path.join(internal, "callers"))
+
+      for file <- ~w(agent_test_events.json agent_test.lock.json agent_test.log),
+          do: File.write!(Path.join(internal, file), "x")
+
+      File.cd!(dir, fn -> {:ok, _config} = ClientUtils.TestFormatter.init([]) end)
+
+      assert File.ls!(internal) == []
+    end
+
     test "initializes with default values" do
       {:ok, config} = ClientUtils.TestFormatter.init([])
 
