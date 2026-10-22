@@ -34,14 +34,22 @@ defmodule ClientUtils.RunLink do
   # files in parallel, and a process minted as `nonode@nohost` reads as a
   # foreign pid once the node gets a name. A BEAM that is not distributed —
   # a harness too old to name it — runs as a plain `mix test`.
+  #
+  # Only a hidden node links. A visible one would join `:global` with the
+  # harness and every other run connected to it, and test processes registered
+  # globally (`Mox.Server`, Swoosh's storage) would collide across runs: one
+  # run's Mox calls landed in another's server (`badfun`). A harness that starts
+  # runs visible gets a plain `mix test`.
   defp join(harness) do
-    if Node.alive?() do
+    if Node.alive?() and hidden?() do
       link(harness)
     else
-      IO.puts(:stderr, "CodeMySpec: this run's BEAM is not distributed; not reporting live.")
+      IO.puts(:stderr, "CodeMySpec: this run's BEAM is not a hidden node; not reporting live.")
       nil
     end
   end
+
+  defp hidden?, do: match?({:ok, _}, :init.get_argument(:hidden))
 
   defp link(harness) do
     run_id = String.to_integer(System.fetch_env!("CMS_RUN_ID"))
@@ -49,7 +57,7 @@ defmodule ClientUtils.RunLink do
 
     with true <- Node.connect(harness),
          true <- listening?(harness, listener) do
-      watch(owner(run_id) || {listener, harness})
+      watch(owner(harness, run_id) || {listener, harness})
       %__MODULE__{harness: harness, listener: listener, run_id: run_id}
     else
       _ ->
@@ -58,15 +66,15 @@ defmodule ClientUtils.RunLink do
     end
   end
 
-  # The harness process that owns this run, registered as `{:cms_run, id}`. A
-  # harness that registers none (one older than its client_utils, which as a
-  # path dependency updates first) is watched through its listener instead.
-  defp owner(run_id) do
-    :global.sync()
-
-    case :global.whereis_name({:cms_run, run_id}) do
+  # The harness process that owns this run, registered there as
+  # `{:cms_run, id}`; asked of the harness, since a hidden node shares no
+  # `:global` with it. A harness that registers none (one older than its
+  # client_utils, which as a path dependency updates first) is watched through
+  # its listener instead.
+  defp owner(harness, run_id) do
+    case :rpc.call(harness, :global, :whereis_name, [{:cms_run, run_id}]) do
       pid when is_pid(pid) -> pid
-      :undefined -> nil
+      _ -> nil
     end
   end
 
