@@ -2,14 +2,6 @@ defmodule ClientUtils.TestFormatterTest do
   use ExUnit.Case
   import ClientUtils.TestFormatter.JsonFormatter
 
-  alias ClientUtils.TestFormatter.TestCache
-
-  setup do
-    TestCache.ensure_started()
-    TestCache.clear()
-    :ok
-  end
-
   describe "JsonFormatter" do
     test "formats passing test" do
       test = %ExUnit.Test{case: TestModule, name: :"should test"}
@@ -46,7 +38,10 @@ defmodule ClientUtils.TestFormatterTest do
     end
 
     test "formats failing test case" do
-      failures = [{:error, catch_error(raise "oops"), []}, {:error, catch_error(raise "oops"), []}]
+      failures = [
+        {:error, catch_error(raise "oops"), []},
+        {:error, catch_error(raise "oops"), []}
+      ]
 
       test = %ExUnit.Test{
         case: TestModule,
@@ -69,7 +64,11 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{case: TestModule, name: :"should test"}
 
       assert format_test_pending(test) ==
-               %{"title" => "should test", "fullTitle" => "TestModule: should test", "pending" => true}
+               %{
+                 "title" => "should test",
+                 "fullTitle" => "TestModule: should test",
+                 "pending" => true
+               }
     end
 
     test "formats suite start event" do
@@ -112,7 +111,6 @@ defmodule ClientUtils.TestFormatterTest do
       assert config.tests == []
       assert config.failures == []
       assert config.pending == []
-      assert config.events == []
       assert is_pid(config.cli_formatter)
     end
 
@@ -136,7 +134,7 @@ defmodule ClientUtils.TestFormatterTest do
     end
   end
 
-  describe "TestFormatter event collection" do
+  describe "TestFormatter counters" do
     setup do
       {:ok, config} = ClientUtils.TestFormatter.init([])
       # Stop the cli_formatter to avoid interference
@@ -147,23 +145,14 @@ defmodule ClientUtils.TestFormatterTest do
       {:ok, config: config}
     end
 
-    test "collects test events", %{config: config} do
+    test "increments pass_counter for passing tests", %{config: config} do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
         state: nil,
-        tags: %{file: "/test/file.exs", test_type: :test}
+        tags: %{test_type: :test}
       }
 
-      event = {:test_finished, test}
-      {:noreply, new_config} = ClientUtils.TestFormatter.handle_cast(event, config)
-
-      assert length(new_config.events) == 1
-      assert hd(new_config.events) == event
-    end
-
-    test "increments pass_counter for passing tests", %{config: config} do
-      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil, tags: %{test_type: :test}}
       event = {:test_finished, test}
 
       {:noreply, new_config} = ClientUtils.TestFormatter.handle_cast(event, config)
@@ -241,7 +230,13 @@ defmodule ClientUtils.TestFormatterTest do
       {:ok, config} = ClientUtils.TestFormatter.init(output_file: output_file)
 
       # Add a passing test
-      test = %ExUnit.Test{case: TestModule, name: :"should test", state: nil, tags: %{test_type: :test}}
+      test = %ExUnit.Test{
+        case: TestModule,
+        name: :"should test",
+        state: nil,
+        tags: %{test_type: :test}
+      }
+
       {:noreply, config} = ClientUtils.TestFormatter.handle_cast({:test_finished, test}, config)
 
       # Set start time
@@ -272,39 +267,6 @@ defmodule ClientUtils.TestFormatterTest do
 
       {:noreply, _config} =
         ClientUtils.TestFormatter.handle_cast({:suite_finished, 1000, 500}, config)
-    end
-  end
-
-  describe "TestFormatter caching" do
-    test "stores events to cache on suite_finished" do
-      {:ok, config} = ClientUtils.TestFormatter.init([])
-
-      file = "/test/cached_file.exs"
-      before_time = DateTime.utc_now()
-      Process.sleep(10)
-
-      test = %ExUnit.Test{
-        case: TestModule,
-        name: :"should test",
-        state: nil,
-        tags: %{file: file, test_type: :test}
-      }
-
-      {:noreply, config} =
-        ClientUtils.TestFormatter.handle_cast({:test_finished, test}, config)
-
-      # Set start time
-      config = %{config | start_time: NaiveDateTime.utc_now()}
-
-      # Finish the suite - this should flush events to cache
-      {:noreply, new_config} =
-        ClientUtils.TestFormatter.handle_cast({:suite_finished, 1000, 500}, config)
-
-      # Events should be cleared after flush
-      assert new_config.events == []
-
-      # But they should be in the cache
-      assert TestCache.file_tested_after?(file, before_time) == true
     end
   end
 end

@@ -6,7 +6,7 @@ defmodule ClientUtils.MixProject do
   def project do
     [
       app: :client_utils,
-      version: "0.1.39",
+      version: "0.2.0",
       elixir: "~> 1.18",
       description: "ExUnit formatter with JSON output and distributed test coordination",
       package: package(),
@@ -60,7 +60,6 @@ defmodule ClientUtils.MixProject do
       # it; every Phoenix app already has it, which is every app that could want
       # the plug.
       {:plug, "~> 1.0", optional: true},
-      {:logger_file_backend, "~> 0.0.14"},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end

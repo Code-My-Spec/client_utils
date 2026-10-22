@@ -5,21 +5,16 @@ defmodule ClientUtils.TestFormatter do
   ExUnit formatter that:
   - Delegates to CLIFormatter for normal terminal output
   - Writes JSON results to a file (if configured)
-  - Caches test events for later querying
   """
 
   require Logger
 
   alias ClientUtils.TestFormatter.JsonFormatter
-  alias ClientUtils.TestFormatter.TestCache
 
   # GenServer callbacks that receive test runner messages
 
   def init(opts) do
     output_file = opts[:output_file] || System.get_env("EXUNIT_JSON_OUTPUT_FILE")
-
-    # Setup cache
-    TestCache.setup()
 
     # Start CLIFormatter for normal terminal output
     # CLIFormatter expects specific config keys with defaults
@@ -45,8 +40,7 @@ defmodule ClientUtils.TestFormatter do
       start_time: nil,
       tests: [],
       failures: [],
-      pending: [],
-      events: []
+      pending: []
     }
 
     {:ok, config}
@@ -61,13 +55,13 @@ defmodule ClientUtils.TestFormatter do
   def handle_cast({:suite_finished, run_us, load_us} = event, state) do
     flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
-    {:noreply, %{state | events: []}}
+    {:noreply, state}
   end
 
   def handle_cast({:suite_finished, %{run: run_us, load: load_us}} = event, state) do
     flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
-    {:noreply, %{state | events: []}}
+    {:noreply, state}
   end
 
   def handle_cast(
@@ -77,26 +71,22 @@ defmodule ClientUtils.TestFormatter do
     test_result = JsonFormatter.format_test_case_failure(test_case, failure)
     GenServer.cast(state.cli_formatter, event)
 
-    state = collect_event(state, event)
     {:noreply, %{state | failures: [test_result | state.failures]}}
   end
 
   def handle_cast({:case_finished, _} = event, state) do
     GenServer.cast(state.cli_formatter, event)
-    state = collect_event(state, event)
     {:noreply, %{state | case_counter: state.case_counter + 1}}
   end
 
   def handle_cast({:test_started, _} = event, state) do
     GenServer.cast(state.cli_formatter, event)
-    {:noreply, collect_event(state, event)}
+    {:noreply, state}
   end
 
   def handle_cast({:test_finished, test = %ExUnit.Test{state: nil}} = event, state) do
     test_result = JsonFormatter.format_test_pass(test)
     GenServer.cast(state.cli_formatter, event)
-
-    state = collect_event(state, event)
 
     {:noreply,
      %{state | pass_counter: state.pass_counter + 1, tests: [test_result | state.tests]}}
@@ -105,8 +95,6 @@ defmodule ClientUtils.TestFormatter do
   def handle_cast({:test_finished, test = %ExUnit.Test{state: {:failed, failure}}} = event, state) do
     test_result = JsonFormatter.format_test_failure(test, failure)
     GenServer.cast(state.cli_formatter, event)
-
-    state = collect_event(state, event)
 
     {:noreply,
      %{
@@ -120,8 +108,6 @@ defmodule ClientUtils.TestFormatter do
     test_result = JsonFormatter.format_test_pending(test)
     GenServer.cast(state.cli_formatter, event)
 
-    state = collect_event(state, event)
-
     {:noreply,
      %{
        state
@@ -132,15 +118,12 @@ defmodule ClientUtils.TestFormatter do
 
   def handle_cast({:test_finished, %ExUnit.Test{state: {:invalid, _}}} = event, state) do
     GenServer.cast(state.cli_formatter, event)
-    state = collect_event(state, event)
     {:noreply, %{state | invalid_counter: state.invalid_counter + 1}}
   end
 
   def handle_cast({:test_finished, test = %ExUnit.Test{state: {:excluded, _}}} = event, state) do
     test_result = JsonFormatter.format_test_pending(test)
     GenServer.cast(state.cli_formatter, event)
-
-    state = collect_event(state, event)
 
     {:noreply,
      %{
@@ -153,23 +136,13 @@ defmodule ClientUtils.TestFormatter do
   # Catch-all for any other events
   def handle_cast(event, state) do
     GenServer.cast(state.cli_formatter, event)
-    {:noreply, collect_event(state, event)}
+    {:noreply, state}
   end
 
   # Private functions
 
-  defp collect_event(state, event) do
-    %{state | events: state.events ++ [event]}
-  end
-
   defp flush_results(state, run_us, load_us) do
-    # Cache and file writes are best-effort — never crash the formatter
-    try do
-      TestCache.store_events(state.events)
-    rescue
-      e -> Logger.warning("TestCache.store_events failed: #{Exception.message(e)}")
-    end
-
+    # The file write is best-effort — never crash the formatter
     if state.output_file do
       try do
         stats = JsonFormatter.format_stats(state, run_us, load_us)

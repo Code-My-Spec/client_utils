@@ -90,72 +90,12 @@ ExUnit.start(formatters: [{ClientUtils.TestFormatter, streaming: true, output_fi
 {"type":"suite:end","stats":{...}}
 ```
 
-## Distributed Test Coordination
-
-The `mix agent_test` task coordinates multiple concurrent test requests. This is useful for editor integrations where multiple "run test" commands might be triggered in quick succession.
-
-### How It Works
-
-```mermaid
-sequenceDiagram
-    participant A1 as Agent 1 (Runner)
-    participant A2 as Agent 2 (Waiter)
-    participant Lock as Lock File
-    participant Cache as Event Cache
-    participant Tests as Mix Test
-
-    A1->>Lock: Create caller file
-    A2->>Lock: Create caller file
-
-    A1->>Lock: Acquire lock
-    A2->>Lock: Fail acquire lock
-
-    A2->>A2: Wait
-
-    A1->>Tests: Run mix test with custom formatter
-    Tests-->>A1: Stream test events to terminal
-    Tests->>Cache: Store events
-    A1->>Lock: Release lock
-
-    A2->>Cache: Get events for my files after my timestamp
-    Cache-->>A2: Return cached events
-    A2->>A2: Replay events to CLI formatter
-```
-
-- **Runner**: First caller acquires the lock, runs tests normally, caches all test events
-- **Waiter**: Subsequent callers wait for the runner to finish, then receive cached results for their requested files
-
-### Usage
-
-```bash
-mix agent_test test/my_test.exs
-```
-
-Multiple concurrent invocations are automatically coordinated—only one runs tests at a time, others receive cached results.
-
-### Cache API
-
-Query the test cache programmatically:
-
-```elixir
-alias ClientUtils.TestFormatter.TestCache
-
-# Check if files were tested recently
-TestCache.file_tested_after?("test/my_test.exs", datetime)
-TestCache.files_tested_after?(["test/a.exs", "test/b.exs"], datetime)
-
-# Retrieve cached events
-TestCache.get_events_for_file("test/my_test.exs", since)
-TestCache.get_events_after(since)
-```
-
 ## Configuration
 
 | Environment Variable      | Description                 |
 | ------------------------- | --------------------------- |
 | `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file   |
 | `EXUNIT_JSON_STREAMING`   | Enable streaming mode       |
-| `AGENT_TEST_EVENTS_FILE`  | Custom path for event cache |
 
 ## License
 
