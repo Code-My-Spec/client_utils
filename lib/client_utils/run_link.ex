@@ -6,7 +6,8 @@ defmodule ClientUtils.RunLink do
   `CMS_HARNESS_COOKIE` and `CMS_RUN_ID`, and optionally `CMS_RUN_LISTENER`,
   the process to report to (by default the harness's `CmsHarness.RunLink`).
   The run joins that node and sends each event as it happens to that process.
-  It halts when that process goes away, so a run never outlives its harness.
+  It halts when the harness process that owns it goes away, so a run never
+  outlives its harness.
   A run started with none of these runs as a plain `mix test`.
   """
 
@@ -46,12 +47,25 @@ defmodule ClientUtils.RunLink do
     run_id = String.to_integer(System.fetch_env!("CMS_RUN_ID"))
     listener = String.to_atom(System.get_env("CMS_RUN_LISTENER") || @default_listener)
 
-    if Node.connect(harness) == true and listening?(harness, listener) do
-      watch(harness, listener)
+    with true <- Node.connect(harness),
+         true <- listening?(harness, listener),
+         owner when is_pid(owner) <- owner(run_id) do
+      watch(owner)
       %__MODULE__{harness: harness, listener: listener, run_id: run_id}
     else
-      IO.puts(:stderr, "CodeMySpec: no harness at #{harness} to report to; not running.")
-      System.halt(2)
+      _ ->
+        IO.puts(:stderr, "CodeMySpec: no harness at #{harness} to report to; not running.")
+        System.halt(2)
+    end
+  end
+
+  # The harness process that owns this run, registered as `{:cms_run, id}`.
+  defp owner(run_id) do
+    :global.sync()
+
+    case :global.whereis_name({:cms_run, run_id}) do
+      pid when is_pid(pid) -> pid
+      :undefined -> nil
     end
   end
 
@@ -68,15 +82,17 @@ defmodule ClientUtils.RunLink do
   defp listening?(harness, listener),
     do: is_pid(:rpc.call(harness, Process, :whereis, [listener]))
 
-  # The run halts the moment its harness's process or node goes away.
-  defp watch(harness, listener) do
+  # The run halts the moment the process that owns it goes away: its copy
+  # stopping, its harness restarting, or the run being cancelled.
+  defp watch(owner) do
     spawn(fn ->
-      ref = Process.monitor({listener, harness})
+      ref = Process.monitor(owner)
 
+      # Halt without writing first: the owner held the port this run's output
+      # goes to, so with it gone a write to stderr fails and the halt is never
+      # reached.
       receive do
-        {:DOWN, ^ref, _, _, _} ->
-          IO.puts(:stderr, "CodeMySpec: the harness went away; stopping the run.")
-          System.halt(1)
+        {:DOWN, ^ref, _, _, _} -> System.halt(1)
       end
     end)
 
