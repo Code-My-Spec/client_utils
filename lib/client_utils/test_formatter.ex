@@ -17,7 +17,7 @@ defmodule ClientUtils.TestFormatter do
   # GenServer callbacks that receive test runner messages
 
   def handle_cast(event, state) do
-    RunLink.report(state.link, live_event(event))
+    RunLink.report(state.link, event |> live_event() |> of_shard(state.shard?))
     handle_event(event, state)
   end
 
@@ -37,6 +37,9 @@ defmodule ClientUtils.TestFormatter do
     {:ok, cli_formatter} = GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
     config = %{
+      # One of a run's `CMS_RUN_SHARDS` processes: the run finishes once, when
+      # its runner exits, not when this shard does.
+      shard?: System.get_env("CMS_RUN_SHARDS") not in [nil, ""],
       link: RunLink.join(),
       seed: opts[:seed],
       trace: opts[:trace],
@@ -180,6 +183,9 @@ defmodule ClientUtils.TestFormatter do
   defp live_event({:suite_finished, _times}), do: %{"event" => "finished"}
   defp live_event({:suite_finished, _run_us, _load_us}), do: %{"event" => "finished"}
   defp live_event(_event), do: nil
+
+  defp of_shard(%{"event" => "finished"}, true), do: nil
+  defp of_shard(event, _shard?), do: event
 
   defp outcome(nil, _file, _line), do: %{"state" => "passed"}
 
