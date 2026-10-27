@@ -7,7 +7,17 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{case: TestModule, name: :"should test"}
 
       assert format_test_pass(test) ==
-               %{"title" => "should test", "fullTitle" => "TestModule: should test"}
+               %{
+                 "title" => "should test",
+                 "fullTitle" => "TestModule: should test",
+                 "duration" => 0.0
+               }
+    end
+
+    test "a test's duration is its run time in milliseconds" do
+      test = %ExUnit.Test{case: TestModule, name: :"should test", time: 41_250}
+
+      assert %{"duration" => 41.25} = format_test_pass(test)
     end
 
     test "formats failing test" do
@@ -29,6 +39,7 @@ defmodule ClientUtils.TestFormatterTest do
                %{
                  "title" => "should test",
                  "fullTitle" => "TestModule: should test",
+                 "duration" => 0.0,
                  "error" => %{
                    "file" => "test/test_formatter_test.exs",
                    "line" => 1,
@@ -67,7 +78,8 @@ defmodule ClientUtils.TestFormatterTest do
                %{
                  "title" => "should test",
                  "fullTitle" => "TestModule: should test",
-                 "pending" => true
+                 "pending" => true,
+                 "duration" => 0.0
                }
     end
 

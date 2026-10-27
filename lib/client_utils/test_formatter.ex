@@ -174,7 +174,8 @@ defmodule ClientUtils.TestFormatter do
         "name" => test_name(test),
         "module" => inspect(test.module),
         "file" => file,
-        "line" => test.tags[:line]
+        "line" => test.tags[:line],
+        "duration" => JsonFormatter.duration(test)
       },
       outcome(test.state, file, test.tags[:line])
     )

@@ -89,8 +89,15 @@ defmodule ClientUtils.TestFormatter.JsonFormatter do
     name_str = Atom.to_string(name)
     case_str = case |> Atom.to_string() |> String.trim_leading("Elixir.")
 
-    %{"title" => name_str, "fullTitle" => "#{case_str}: #{name_str}"}
+    %{
+      "title" => name_str,
+      "fullTitle" => "#{case_str}: #{name_str}",
+      "duration" => duration(test)
+    }
   end
+
+  @doc "A test's run time in milliseconds, from ExUnit's microseconds."
+  def duration(%ExUnit.Test{time: time}), do: time / 1_000
 
   @doc """
   Formats a skipped or excluded test as pending.
@@ -114,6 +121,7 @@ defmodule ClientUtils.TestFormatter.JsonFormatter do
     %{
       "title" => to_string(name),
       "fullTitle" => "#{inspect(case)}: #{name}",
+      "duration" => duration(test),
       "error" => %{
         "file" => Path.relative_to_cwd(tags[:file]),
         "line" => tags[:line],
