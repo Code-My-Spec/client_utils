@@ -131,7 +131,7 @@ defmodule ClientUtils.TestFormatter do
      }}
   end
 
-  defp handle_event({:test_finished, test = %ExUnit.Test{state: {:skip, _}}} = event, state) do
+  defp handle_event({:test_finished, test = %ExUnit.Test{state: {:skipped, _}}} = event, state) do
     test_result = JsonFormatter.format_test_pending(test)
     GenServer.cast(state.cli_formatter, event)
 
@@ -214,8 +214,7 @@ defmodule ClientUtils.TestFormatter do
   defp finished({:failed, [{_kind, reason, stack} | _]}, file, line),
     do: Map.put(failure(reason, stack, file, line), "event", "test_failed")
 
-  defp finished({skipped, _}, _file, _line) when skipped in [:skipped, :skip],
-    do: %{"event" => "test_skipped"}
+  defp finished({:skipped, _}, _file, _line), do: %{"event" => "test_skipped"}
 
   defp finished({:excluded, _}, _file, _line), do: %{"event" => "test_excluded"}
   defp finished({state, _}, _file, _line), do: %{"event" => "test_#{state}"}

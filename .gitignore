@@ -33,3 +33,6 @@ repomix-output.xml
 
 # Written by the agent_test suite via AGENT_TEST_EVENTS_FILE, not source.
 fixtures/shared_test_events.json
+
+# ExUnit @tag :tmp_dir output.
+/tmp/

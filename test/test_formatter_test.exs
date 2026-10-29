@@ -207,7 +207,7 @@ defmodule ClientUtils.TestFormatterTest do
       test = %ExUnit.Test{
         case: TestModule,
         name: :"should test",
-        state: {:skip, "skipped"},
+        state: {:skipped, "skipped"},
         tags: %{test_type: :test}
       }
 
@@ -281,6 +281,28 @@ defmodule ClientUtils.TestFormatterTest do
 
       # Cleanup
       File.rm(output_file)
+    end
+
+    @tag :tmp_dir
+    test "counts a skipped test as pending", %{tmp_dir: dir} do
+      output_file = Path.join(dir, "results.json")
+      {:ok, config} = ClientUtils.TestFormatter.init(output_file: output_file)
+
+      test = %ExUnit.Test{
+        case: TestModule,
+        name: :"should test",
+        state: {:skipped, "due to skip tag"},
+        tags: %{test_type: :test}
+      }
+
+      {:noreply, config} = ClientUtils.TestFormatter.handle_cast({:test_finished, test}, config)
+      config = %{config | start_time: NaiveDateTime.utc_now()}
+      ClientUtils.TestFormatter.handle_cast({:suite_finished, 1000, 500}, config)
+
+      json = output_file |> File.read!() |> Jason.decode!()
+
+      assert %{"pending" => 1, "tests" => 1} = json["stats"]
+      assert [%{"title" => "should test", "pending" => true}] = json["pending"]
     end
 
     test "does not write JSON when output_file is not set" do
