@@ -7,7 +7,9 @@ defmodule ClientUtils.RunLink do
   the process to report to (by default the harness's `CmsHarness.RunLink`).
   The run joins that node and sends each event as it happens to that process.
   It halts when the harness process that owns it goes away, so a run never
-  outlives its harness.
+  outlives its harness, unless it keeps a stream of its events for the harness
+  to re-attach to (`outlive_harness: true`): that run finishes, and what it
+  would have reported is dropped.
   A run started with none of these runs as a plain `mix test`.
   """
 
@@ -25,17 +27,18 @@ defmodule ClientUtils.RunLink do
 
   @doc """
   Join the harness named in the environment, or `nil` when none is named.
-  A harness that is named but cannot be reached halts the run before any test.
+  A harness that is named but cannot be reached halts the run before any test,
+  unless the run outlives its harness (see `on_harness_lost/1`).
   """
-  @spec join() :: t() | nil
-  def join do
+  @spec join(keyword()) :: t() | nil
+  def join(opts \\ []) do
     harness = System.get_env("CMS_HARNESS_NODE")
     run_env = for name <- @run_env, value = System.get_env(name), into: %{}, do: {name, value}
     forget_run_env()
 
     case harness do
       blank when blank in [nil, ""] -> nil
-      harness -> join(String.to_atom(harness), run_env)
+      harness -> join(String.to_atom(harness), run_env, opts[:outlive_harness] == true)
     end
   end
 
@@ -52,9 +55,9 @@ defmodule ClientUtils.RunLink do
   # globally (`Mox.Server`, Swoosh's storage) would collide across runs: one
   # run's Mox calls landed in another's server (`badfun`). A harness that starts
   # runs visible gets a plain `mix test`.
-  defp join(harness, run_env) do
+  defp join(harness, run_env, outlive?) do
     if Node.alive?() and hidden?() do
-      link(harness, run_env)
+      link(harness, run_env, outlive?)
     else
       IO.puts(:stderr, "CodeMySpec: this run's BEAM is not a hidden node; not reporting live.")
       nil
@@ -63,18 +66,30 @@ defmodule ClientUtils.RunLink do
 
   defp hidden?, do: match?({:ok, _}, :init.get_argument(:hidden))
 
-  defp link(harness, run_env) do
+  defp link(harness, run_env, outlive?) do
     run_id = String.to_integer(Map.fetch!(run_env, "CMS_RUN_ID"))
     listener = String.to_atom(Map.get(run_env, "CMS_RUN_LISTENER", @default_listener))
+    link = %__MODULE__{harness: harness, listener: listener, run_id: run_id}
 
     with true <- Node.connect(harness),
          true <- listening?(harness, listener) do
-      watch(owner(harness, run_id) || {listener, harness})
-      %__MODULE__{harness: harness, listener: listener, run_id: run_id}
+      watch(owner(harness, run_id) || {listener, harness}, link, outlive?)
+      link
     else
       _ ->
-        IO.puts(:stderr, "CodeMySpec: no harness at #{harness} to report to; not running.")
-        System.halt(2)
+        case on_harness_lost(outlive?) do
+          :halt ->
+            IO.puts(:stderr, "CodeMySpec: no harness at #{harness} to report to; not running.")
+            System.halt(2)
+
+          :continue ->
+            IO.puts(
+              :stderr,
+              "CodeMySpec: no harness at #{harness} to report to; not reporting live."
+            )
+
+            nil
+        end
     end
   end
 
@@ -95,17 +110,26 @@ defmodule ClientUtils.RunLink do
   def report(nil, _event), do: :ok
   def report(_link, nil), do: :ok
 
-  def report(%__MODULE__{harness: harness, listener: listener, run_id: run_id}, event) do
-    send({listener, harness}, {:run_event, run_id, event})
+  def report(%__MODULE__{harness: harness, listener: listener, run_id: run_id} = link, event) do
+    unless lost?(link), do: send({listener, harness}, {:run_event, run_id, event})
     :ok
   end
+
+  @doc """
+  What a run does when its harness goes away: halts, unless it outlives its
+  harness, when it carries on and stops reporting.
+  """
+  @spec on_harness_lost(boolean()) :: :halt | :continue
+  def on_harness_lost(true), do: :continue
+  def on_harness_lost(false), do: :halt
 
   defp listening?(harness, listener),
     do: is_pid(:rpc.call(harness, Process, :whereis, [listener]))
 
   # The run halts the moment the process that owns it goes away: its copy
   # stopping, its harness restarting, or the run being cancelled.
-  defp watch(owner) do
+  @doc false
+  def watch(owner, link, outlive?) do
     spawn(fn ->
       ref = Process.monitor(owner)
 
@@ -113,10 +137,15 @@ defmodule ClientUtils.RunLink do
       # goes to, so with it gone a write to stderr fails and the halt is never
       # reached.
       receive do
-        {:DOWN, ^ref, _, _, _} -> System.halt(1)
+        {:DOWN, ^ref, _, _, _} ->
+          case on_harness_lost(outlive?) do
+            :halt -> System.halt(1)
+            :continue -> :persistent_term.put(lost_key(link), true)
+          end
       end
     end)
-
-    :ok
   end
+
+  defp lost?(link), do: :persistent_term.get(lost_key(link), false)
+  defp lost_key(%__MODULE__{run_id: run_id}), do: {__MODULE__, :lost, run_id}
 end

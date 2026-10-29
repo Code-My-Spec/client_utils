@@ -92,10 +92,11 @@ ExUnit.start(formatters: [{ClientUtils.TestFormatter, streaming: true, output_fi
 
 ## Configuration
 
-| Environment Variable      | Description                 |
-| ------------------------- | --------------------------- |
-| `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file   |
-| `EXUNIT_JSON_STREAMING`   | Enable streaming mode       |
+| Environment Variable      | Description                                                                 |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file                                                   |
+| `EXUNIT_JSON_STREAMING`   | Enable streaming mode                                                       |
+| `CMS_RUN_EVENT_STREAM`    | Absolute path to append one JSON event per line to; the run outlives its harness |
 
 ## License
 

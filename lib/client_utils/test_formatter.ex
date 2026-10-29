@@ -7,18 +7,21 @@ defmodule ClientUtils.TestFormatter do
   - Writes JSON results to a file (if configured)
   - Reports each event, as it happens, to the CodeMySpec harness that
     started the run (`ClientUtils.RunLink`)
+  - Appends each event to a durable stream the harness can re-attach to
+    (`ClientUtils.TestFormatter.EventStream`), when it names one
   """
 
   require Logger
 
   alias ClientUtils.RunLink
+  alias ClientUtils.TestFormatter.EventStream
   alias ClientUtils.TestFormatter.JsonFormatter
 
   # GenServer callbacks that receive test runner messages
 
   def handle_cast(event, state) do
     RunLink.report(state.link, event |> live_event() |> of_shard(state.shard?))
-    handle_event(event, state)
+    handle_event(event, %{state | stream: EventStream.write(state.stream, stream_event(event))})
   end
 
   def init(opts) do
@@ -34,13 +37,21 @@ defmodule ClientUtils.TestFormatter do
       |> Keyword.put_new(:slowest, 0)
       |> Keyword.put_new(:slowest_modules, 0)
 
-    {:ok, cli_formatter} = GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
+    stream = EventStream.open()
+
+    # A streamed run outlives its harness, and with it the pipe the CLI output
+    # goes to; the CLI formatter's first failed write must not take this down.
+    {:ok, cli_formatter} =
+      if stream,
+        do: GenServer.start(ExUnit.CLIFormatter, cli_opts),
+        else: GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
     config = %{
       # One of a run's `CMS_RUN_SHARDS` processes: the run finishes once, when
       # its runner exits, not when this shard does.
       shard?: System.get_env("CMS_RUN_SHARDS") not in [nil, ""],
-      link: RunLink.join(),
+      link: RunLink.join(outlive_harness: stream != nil),
+      stream: stream,
       seed: opts[:seed],
       trace: opts[:trace],
       output_file: output_file,
@@ -166,19 +177,10 @@ defmodule ClientUtils.TestFormatter do
     do: %{"event" => "file_finished", "file" => relative(file)}
 
   defp live_event({:test_finished, %ExUnit.Test{} = test}) do
-    file = relative(test.tags[:file])
-
-    Map.merge(
-      %{
-        "event" => "test",
-        "name" => test_name(test),
-        "module" => inspect(test.module),
-        "file" => file,
-        "line" => test.tags[:line],
-        "duration" => JsonFormatter.duration(test)
-      },
-      outcome(test.state, file, test.tags[:line])
-    )
+    test
+    |> test_fields()
+    |> Map.merge(%{"event" => "test", "duration" => JsonFormatter.duration(test)})
+    |> Map.merge(outcome(test.state, relative(test.tags[:file]), test.tags[:line]))
   end
 
   defp live_event({:suite_finished, _times}), do: %{"event" => "finished"}
@@ -188,18 +190,56 @@ defmodule ClientUtils.TestFormatter do
   defp of_shard(%{"event" => "finished"}, true), do: nil
   defp of_shard(event, _shard?), do: event
 
+  # What the event stream records of each event.
+  defp stream_event({:suite_started, _opts}), do: %{"event" => "suite_started"}
+
+  defp stream_event({:test_started, %ExUnit.Test{} = test}),
+    do: Map.put(test_fields(test), "event", "test_started")
+
+  defp stream_event({:test_finished, %ExUnit.Test{} = test}) do
+    test
+    |> test_fields()
+    |> Map.put("duration", JsonFormatter.duration(test))
+    |> Map.merge(finished(test.state, relative(test.tags[:file]), test.tags[:line]))
+  end
+
+  defp stream_event({:suite_finished, %{run: run_us}}), do: suite_finished(run_us)
+  defp stream_event({:suite_finished, run_us, _load_us}), do: suite_finished(run_us)
+  defp stream_event(_event), do: nil
+
+  defp suite_finished(run_us), do: %{"event" => "suite_finished", "duration" => run_us / 1_000}
+
+  defp finished(nil, _file, _line), do: %{"event" => "test_passed"}
+
+  defp finished({:failed, [{_kind, reason, stack} | _]}, file, line),
+    do: Map.put(failure(reason, stack, file, line), "event", "test_failed")
+
+  defp finished({skipped, _}, _file, _line) when skipped in [:skipped, :skip],
+    do: %{"event" => "test_skipped"}
+
+  defp finished({:excluded, _}, _file, _line), do: %{"event" => "test_excluded"}
+  defp finished({state, _}, _file, _line), do: %{"event" => "test_#{state}"}
+
+  defp test_fields(%ExUnit.Test{} = test) do
+    %{
+      "name" => test_name(test),
+      "module" => inspect(test.module),
+      "file" => relative(test.tags[:file]),
+      "line" => test.tags[:line]
+    }
+  end
+
   defp outcome(nil, _file, _line), do: %{"state" => "passed"}
 
   defp outcome({:failed, [{_kind, reason, stack} | _]}, file, line),
-    do: %{
-      "state" => "failed",
-      "message" => message(reason),
-      "failure_line" => failure_line(stack, file, line)
-    }
+    do: Map.put(failure(reason, stack, file, line), "state", "failed")
 
   defp outcome({:skipped, _}, _file, _line), do: %{"state" => "skipped"}
   defp outcome({:excluded, _}, _file, _line), do: %{"state" => "skipped"}
   defp outcome({state, _}, _file, _line), do: %{"state" => to_string(state)}
+
+  defp failure(reason, stack, file, line),
+    do: %{"message" => message(reason), "failure_line" => failure_line(stack, file, line)}
 
   defp message(%ExUnit.AssertionError{message: message}), do: message
   defp message(exception) when is_exception(exception), do: Exception.message(exception)
