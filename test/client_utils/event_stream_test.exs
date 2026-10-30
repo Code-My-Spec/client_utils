@@ -76,7 +76,7 @@ defmodule ClientUtils.TestFormatter.EventStreamTest do
              %{"event" => "test_failed", "seq" => 5} = failed,
              %{"event" => "test_skipped", "seq" => 6},
              %{"event" => "test_excluded", "seq" => 7},
-             %{"event" => "test_invalid", "seq" => 8},
+             %{"event" => "test_invalid", "seq" => 8} = invalid,
              %{"event" => "suite_finished", "seq" => 9} = finished
            ] = events(path)
 
@@ -93,6 +93,7 @@ defmodule ClientUtils.TestFormatter.EventStreamTest do
              Map.merge(started, %{"event" => "test_passed", "seq" => 3, "duration" => 2.5})
 
     assert %{"message" => "boom", "failure_line" => 20, "line" => 20, "name" => "fails"} = failed
+    assert %{"message" => "setup_all failed", "failure_line" => 10} = invalid
 
     assert finished == %{
              "event" => "suite_finished",
@@ -104,6 +105,20 @@ defmodule ClientUtils.TestFormatter.EventStreamTest do
              "invalid" => 1,
              "duration" => 1.5
            }
+  end
+
+  @tag :tmp_dir
+  test "a test its module's setup_all failed carries that failure", %{tmp_dir: dir} do
+    path = Path.join(dir, "1.jsonl")
+    reason = catch_error(raise "no database")
+    module = %ExUnit.TestModule{name: MyApp.SomeTest, state: {:failed, [{:error, reason, []}]}}
+
+    %{"CMS_RUN_EVENT_STREAM" => path}
+    |> start()
+    |> run([{:test_finished, ex_test("invalid", {:invalid, module})}])
+
+    assert [%{"event" => "test_invalid", "message" => "no database", "failure_line" => 10}] =
+             events(path)
   end
 
   @tag :tmp_dir

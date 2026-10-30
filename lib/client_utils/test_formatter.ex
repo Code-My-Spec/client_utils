@@ -217,6 +217,19 @@ defmodule ClientUtils.TestFormatter do
   defp finished({:skipped, _}, _file, _line), do: %{"event" => "test_skipped"}
 
   defp finished({:excluded, _}, _file, _line), do: %{"event" => "test_excluded"}
+
+  # A test made invalid by its module's failed `setup_all` carries that failure,
+  # or the harness would report a failure with nothing to read.
+  defp finished(
+         {:invalid, %ExUnit.TestModule{state: {:failed, [{_kind, reason, stack} | _]}}},
+         file,
+         line
+       ),
+       do: Map.put(failure(reason, stack, file, line), "event", "test_invalid")
+
+  defp finished({:invalid, _}, _file, line),
+    do: %{"event" => "test_invalid", "message" => "setup_all failed", "failure_line" => line}
+
   defp finished({state, _}, _file, _line), do: %{"event" => "test_#{state}"}
 
   defp test_fields(%ExUnit.Test{} = test) do
