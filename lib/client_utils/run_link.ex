@@ -1,63 +1,95 @@
 defmodule ClientUtils.RunLink do
   @moduledoc """
-  A test run's link to the CodeMySpec harness that started it.
+  A run's link to the CodeMySpec harness that started it.
 
   The harness names itself in the run's environment: `CMS_HARNESS_NODE`,
   `CMS_HARNESS_COOKIE` and `CMS_RUN_ID`, and optionally `CMS_RUN_LISTENER`,
   the process to report to (by default the harness's `CmsHarness.RunLink`).
-  The run joins that node and sends each event as it happens to that process.
-  It halts when the harness process that owns it goes away, so a run never
-  outlives its harness, unless it keeps a stream of its events for the harness
-  to re-attach to (`outlive_harness: true`): that run finishes, and what it
-  would have reported is dropped.
+  The run joins that node and sends each event, numbered, to that process.
+
+  A run outlives its harness. Its events are held until the harness
+  acknowledges them; when the harness goes, the run carries on, rejoins a
+  harness that adopts it, and replays what was not acknowledged
+  (`ClientUtils.RunLink.Session`). The run does not exit until its last event,
+  its exit status, is acknowledged.
+
+  Its output goes to `CMS_RUN_OUTPUT`, not the harness's pipe, so nothing it
+  prints fails once that pipe is gone.
+
   A run started with none of these runs as a plain `mix test`.
   """
 
+  alias ClientUtils.RunLink.Session
+
+  defstruct [:session, :run_id]
+
+  @type t :: %__MODULE__{session: pid(), run_id: integer()}
+
   @default_listener "Elixir.CmsHarness.RunLink"
-
-  defstruct [:harness, :listener, :run_id]
-
-  @type t :: %__MODULE__{harness: node(), listener: atom(), run_id: integer()}
 
   # The variables that made this BEAM the run's node are for it alone: a test
   # that shells out to `mix` would otherwise boot a child under the same node
   # name ("the name cms_run_… seems to be in use by another Erlang node").
   # Read once, then removed before any test runs.
-  @run_env ~w(ELIXIR_ERL_OPTIONS CMS_HARNESS_NODE CMS_HARNESS_COOKIE CMS_RUN_ID CMS_RUN_LISTENER)
+  @run_env ~w(ELIXIR_ERL_OPTIONS CMS_HARNESS_NODE CMS_HARNESS_COOKIE CMS_RUN_ID CMS_RUN_LISTENER
+              CMS_RUN_OUTPUT)
 
   @doc """
-  Join the harness named in the environment, or `nil` when none is named.
-  A harness that is named but cannot be reached halts the run before any test,
-  unless the run outlives its harness (see `on_harness_lost/1`).
+  Join the harness named in the environment, or `nil` when none is named. A
+  second join in the same run returns the same link.
   """
   @spec join(keyword()) :: t() | nil
   def join(opts \\ []) do
-    harness = System.get_env("CMS_HARNESS_NODE")
-    run_env = for name <- @run_env, value = System.get_env(name), into: %{}, do: {name, value}
-    forget_run_env()
-
-    case harness do
-      blank when blank in [nil, ""] -> nil
-      harness -> join(String.to_atom(harness), run_env, opts[:outlive_harness] == true)
+    case Process.whereis(Session) do
+      nil -> join_from_env(opts)
+      session -> %__MODULE__{session: session, run_id: Session.run_id(session)}
     end
   end
 
-  defp forget_run_env, do: Enum.each(@run_env, &System.delete_env/1)
+  defp join_from_env(opts) do
+    run_env =
+      for name <- @run_env ++ ~w(CMS_RUN_SHARD CMS_RUN_SHARDS),
+          value = System.get_env(name),
+          into: %{},
+          do: {name, value}
+
+    Enum.each(@run_env, &System.delete_env/1)
+
+    case run_env["CMS_HARNESS_NODE"] do
+      blank when blank in [nil, ""] -> nil
+      harness -> link(String.to_atom(harness), run_env, opts)
+    end
+  end
 
   # The run's BEAM is distributed from boot by the harness (`ELIXIR_ERL_OPTIONS`).
   # Distribution is never started here: `mix test` is still requiring test
   # files in parallel, and a process minted as `nonode@nohost` reads as a
-  # foreign pid once the node gets a name. A BEAM that is not distributed —
-  # a harness too old to name it — runs as a plain `mix test`.
+  # foreign pid once the node gets a name.
   #
   # Only a hidden node links. A visible one would join `:global` with the
   # harness and every other run connected to it, and test processes registered
-  # globally (`Mox.Server`, Swoosh's storage) would collide across runs: one
-  # run's Mox calls landed in another's server (`badfun`). A harness that starts
-  # runs visible gets a plain `mix test`.
-  defp join(harness, run_env, outlive?) do
+  # globally (`Mox.Server`, Swoosh's storage) would collide across runs.
+  defp link(harness, run_env, opts) do
     if Node.alive?() and hidden?() do
-      link(harness, run_env, outlive?)
+      run_id = String.to_integer(Map.fetch!(run_env, "CMS_RUN_ID"))
+      shard = shard(run_env)
+
+      {:ok, session} =
+        Session.start(
+          Keyword.merge(
+            [
+              run_id: run_id,
+              harness: harness,
+              listener: String.to_atom(Map.get(run_env, "CMS_RUN_LISTENER", @default_listener)),
+              output: shard_path(run_env["CMS_RUN_OUTPUT"], shard),
+              shard: shard
+            ],
+            opts
+          )
+        )
+
+      System.at_exit(fn status -> Session.finish(session, status) end)
+      %__MODULE__{session: session, run_id: run_id}
     else
       IO.puts(:stderr, "CodeMySpec: this run's BEAM is not a hidden node; not reporting live.")
       nil
@@ -66,86 +98,65 @@ defmodule ClientUtils.RunLink do
 
   defp hidden?, do: match?({:ok, _}, :init.get_argument(:hidden))
 
-  defp link(harness, run_env, outlive?) do
-    run_id = String.to_integer(Map.fetch!(run_env, "CMS_RUN_ID"))
-    listener = String.to_atom(Map.get(run_env, "CMS_RUN_LISTENER", @default_listener))
-    link = %__MODULE__{harness: harness, listener: listener, run_id: run_id}
-
-    with true <- Node.connect(harness),
-         true <- listening?(harness, listener) do
-      watch(owner(harness, run_id) || {listener, harness}, link, outlive?)
-      link
+  # One of a run's `CMS_RUN_SHARDS` processes, each with its own files.
+  defp shard(run_env) do
+    with {shard, ""} <- Integer.parse(run_env["CMS_RUN_SHARD"] || ""),
+         {shards, ""} <- Integer.parse(run_env["CMS_RUN_SHARDS"] || "") do
+      %{"shard" => shard, "shards" => shards}
     else
-      _ ->
-        case on_harness_lost(outlive?) do
-          :halt ->
-            IO.puts(:stderr, "CodeMySpec: no harness at #{harness} to report to; not running.")
-            System.halt(2)
-
-          :continue ->
-            IO.puts(
-              :stderr,
-              "CodeMySpec: no harness at #{harness} to report to; not reporting live."
-            )
-
-            nil
-        end
-    end
-  end
-
-  # The harness process that owns this run, registered there as
-  # `{:cms_run, id}`; asked of the harness, since a hidden node shares no
-  # `:global` with it. A harness that registers none (one older than its
-  # client_utils, which as a path dependency updates first) is watched through
-  # its listener instead.
-  defp owner(harness, run_id) do
-    case :rpc.call(harness, :global, :whereis_name, [{:cms_run, run_id}]) do
-      pid when is_pid(pid) -> pid
       _ -> nil
     end
   end
 
+  defp shard_path(blank, _shard) when blank in [nil, ""], do: nil
+  defp shard_path(path, nil), do: path
+  defp shard_path(path, %{"shard" => shard}), do: "#{path}.shard-#{shard}"
+
   @doc "Send one event to the harness. A run without a link sends nothing."
-  @spec report(t() | nil, map()) :: :ok
+  @spec report(t() | nil, map() | nil) :: :ok
   def report(nil, _event), do: :ok
   def report(_link, nil), do: :ok
-
-  def report(%__MODULE__{harness: harness, listener: listener, run_id: run_id} = link, event) do
-    unless lost?(link), do: send({listener, harness}, {:run_event, run_id, event})
-    :ok
-  end
+  def report(%__MODULE__{session: session}, event), do: Session.report(session, event)
 
   @doc """
-  What a run does when its harness goes away: halts, unless it outlives its
-  harness, when it carries on and stops reporting.
+  Report the run's exit status and wait until a harness has every event. Its
+  first caller decides the status; the run's exit, which calls it again, waits
+  on the same report. A runner that halts (sexy_spex does) skips the exit, so
+  the formatter reports it when the suite finishes.
   """
-  @spec on_harness_lost(boolean()) :: :halt | :continue
-  def on_harness_lost(true), do: :continue
-  def on_harness_lost(false), do: :halt
+  @spec finish(t() | nil, integer()) :: :ok
+  def finish(nil, _status), do: :ok
+  def finish(%__MODULE__{session: session}, status), do: Session.finish(session, status)
 
-  defp listening?(harness, listener),
-    do: is_pid(:rpc.call(harness, Process, :whereis, [listener]))
+  # The run's stdio goes to its own file, opened by this process, which
+  # outlives every test: once the harness's pipe is gone, a write to it fails
+  # (`:terminated`) and so would every test that prints.
+  @doc """
+  Send this BEAM's stdio to `path`, appended: `:user` and `:standard_error` are
+  re-registered to file devices and every process whose group leader was the
+  old `:user` follows. The devices belong to the caller, which must outlive
+  every test. Also for a run's parent task (`mix cms.spex`), which prints its
+  shards' output and must survive the harness's pipe closing too.
+  """
+  @spec redirect_output(Path.t()) :: Path.t()
+  def redirect_output(path) do
+    File.mkdir_p!(Path.dirname(path))
+    {:ok, out} = File.open(path, [:append, :utf8])
+    {:ok, err} = File.open(path, [:append, :utf8])
+    user = Process.whereis(:user)
 
-  # The run halts the moment the process that owns it goes away: its copy
-  # stopping, its harness restarting, or the run being cancelled.
-  @doc false
-  def watch(owner, link, outlive?) do
-    spawn(fn ->
-      ref = Process.monitor(owner)
+    rename(:user, out)
+    rename(:standard_error, err)
 
-      # Halt without writing first: the owner held the port this run's output
-      # goes to, so with it gone a write to stderr fails and the halt is never
-      # reached.
-      receive do
-        {:DOWN, ^ref, _, _, _} ->
-          case on_harness_lost(outlive?) do
-            :halt -> System.halt(1)
-            :continue -> :persistent_term.put(lost_key(link), true)
-          end
-      end
-    end)
+    for pid <- Process.list(),
+        Process.info(pid, :group_leader) == {:group_leader, user},
+        do: Process.group_leader(pid, out)
+
+    path
   end
 
-  defp lost?(link), do: :persistent_term.get(lost_key(link), false)
-  defp lost_key(%__MODULE__{run_id: run_id}), do: {__MODULE__, :lost, run_id}
+  defp rename(name, pid) do
+    if Process.whereis(name), do: Process.unregister(name)
+    Process.register(pid, name)
+  end
 end

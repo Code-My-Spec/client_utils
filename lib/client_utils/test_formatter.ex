@@ -6,22 +6,20 @@ defmodule ClientUtils.TestFormatter do
   - Delegates to CLIFormatter for normal terminal output
   - Writes JSON results to a file (if configured)
   - Reports each event, as it happens, to the CodeMySpec harness that
-    started the run (`ClientUtils.RunLink`)
-  - Appends each event to a durable stream the harness can re-attach to
-    (`ClientUtils.TestFormatter.EventStream`), when it names one
+    started the run (`ClientUtils.RunLink`), which holds it until the harness
+    has it, across the harness restarting
   """
 
   require Logger
 
   alias ClientUtils.RunLink
-  alias ClientUtils.TestFormatter.EventStream
   alias ClientUtils.TestFormatter.JsonFormatter
 
   # GenServer callbacks that receive test runner messages
 
   def handle_cast(event, state) do
     RunLink.report(state.link, event |> live_event() |> of_shard(state.shard?))
-    handle_event(event, %{state | stream: EventStream.write(state.stream, stream_event(event))})
+    handle_event(event, state)
   end
 
   def init(opts) do
@@ -37,12 +35,13 @@ defmodule ClientUtils.TestFormatter do
       |> Keyword.put_new(:slowest, 0)
       |> Keyword.put_new(:slowest_modules, 0)
 
-    stream = EventStream.open()
+    link = RunLink.join()
 
-    # A streamed run outlives its harness, and with it the pipe the CLI output
-    # goes to; the CLI formatter's first failed write must not take this down.
+    # A linked run outlives its harness, and with it the pipe the CLI output
+    # goes to when the run names no output file; the CLI formatter's first
+    # failed write must not take this down.
     {:ok, cli_formatter} =
-      if stream,
+      if link,
         do: GenServer.start(ExUnit.CLIFormatter, cli_opts),
         else: GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
@@ -50,8 +49,7 @@ defmodule ClientUtils.TestFormatter do
       # One of a run's `CMS_RUN_SHARDS` processes: the run finishes once, when
       # its runner exits, not when this shard does.
       shard?: System.get_env("CMS_RUN_SHARDS") not in [nil, ""],
-      link: RunLink.join(outlive_harness: stream != nil),
-      stream: stream,
+      link: link,
       seed: opts[:seed],
       trace: opts[:trace],
       output_file: output_file,
@@ -79,12 +77,14 @@ defmodule ClientUtils.TestFormatter do
   defp handle_event({:suite_finished, run_us, load_us} = event, state) do
     flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
+    RunLink.finish(state.link, exit_status(state))
     {:noreply, state}
   end
 
   defp handle_event({:suite_finished, %{run: run_us, load: load_us}} = event, state) do
     flush_results(state, run_us, load_us)
     GenServer.cast(state.cli_formatter, event)
+    RunLink.finish(state.link, exit_status(state))
     {:noreply, state}
   end
 
@@ -168,6 +168,13 @@ defmodule ClientUtils.TestFormatter do
 
   # Private functions
 
+  # The status ExUnit exits with, reported before a runner that halts (sexy_spex
+  # does) can skip the run's exit.
+  defp exit_status(%{failure_counter: 0, invalid_counter: 0}), do: 0
+
+  defp exit_status(_state),
+    do: Keyword.get(ExUnit.configuration(), :exit_status, 2)
+
   # What the harness is told of each event, as plain data: the run's node and
   # the harness's need not share ExUnit's structs.
   defp live_event({:module_started, %ExUnit.TestModule{file: file}}),
@@ -190,48 +197,6 @@ defmodule ClientUtils.TestFormatter do
   defp of_shard(%{"event" => "finished"}, true), do: nil
   defp of_shard(event, _shard?), do: event
 
-  # What the event stream records of each event.
-  defp stream_event({:suite_started, _opts}), do: %{"event" => "suite_started"}
-
-  defp stream_event({:test_started, %ExUnit.Test{} = test}),
-    do: Map.put(test_fields(test), "event", "test_started")
-
-  defp stream_event({:test_finished, %ExUnit.Test{} = test}) do
-    test
-    |> test_fields()
-    |> Map.put("duration", JsonFormatter.duration(test))
-    |> Map.merge(finished(test.state, relative(test.tags[:file]), test.tags[:line]))
-  end
-
-  defp stream_event({:suite_finished, %{run: run_us}}), do: suite_finished(run_us)
-  defp stream_event({:suite_finished, run_us, _load_us}), do: suite_finished(run_us)
-  defp stream_event(_event), do: nil
-
-  defp suite_finished(run_us), do: %{"event" => "suite_finished", "duration" => run_us / 1_000}
-
-  defp finished(nil, _file, _line), do: %{"event" => "test_passed"}
-
-  defp finished({:failed, [{_kind, reason, stack} | _]}, file, line),
-    do: Map.put(failure(reason, stack, file, line), "event", "test_failed")
-
-  defp finished({:skipped, _}, _file, _line), do: %{"event" => "test_skipped"}
-
-  defp finished({:excluded, _}, _file, _line), do: %{"event" => "test_excluded"}
-
-  # A test made invalid by its module's failed `setup_all` carries that failure,
-  # or the harness would report a failure with nothing to read.
-  defp finished(
-         {:invalid, %ExUnit.TestModule{state: {:failed, [{_kind, reason, stack} | _]}}},
-         file,
-         line
-       ),
-       do: Map.put(failure(reason, stack, file, line), "event", "test_invalid")
-
-  defp finished({:invalid, _}, _file, line),
-    do: %{"event" => "test_invalid", "message" => "setup_all failed", "failure_line" => line}
-
-  defp finished({state, _}, _file, _line), do: %{"event" => "test_#{state}"}
-
   defp test_fields(%ExUnit.Test{} = test) do
     %{
       "name" => test_name(test),
@@ -248,6 +213,19 @@ defmodule ClientUtils.TestFormatter do
 
   defp outcome({:skipped, _}, _file, _line), do: %{"state" => "skipped"}
   defp outcome({:excluded, _}, _file, _line), do: %{"state" => "skipped"}
+
+  # A test made invalid by its module's failed `setup_all` carries that failure,
+  # or the harness would report a failure with nothing to read.
+  defp outcome(
+         {:invalid, %ExUnit.TestModule{state: {:failed, [{_kind, reason, stack} | _]}}},
+         file,
+         line
+       ),
+       do: Map.put(failure(reason, stack, file, line), "state", "invalid")
+
+  defp outcome({:invalid, _}, _file, line),
+    do: %{"state" => "invalid", "message" => "setup_all failed", "failure_line" => line}
+
   defp outcome({state, _}, _file, _line), do: %{"state" => to_string(state)}
 
   defp failure(reason, stack, file, line),

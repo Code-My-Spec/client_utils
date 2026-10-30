@@ -316,4 +316,40 @@ defmodule ClientUtils.TestFormatterTest do
         ClientUtils.TestFormatter.handle_cast({:suite_finished, 1000, 500}, config)
     end
   end
+
+  describe "what a linked run reports" do
+    # The session is this process: a report is a cast to it.
+    defp linked_state do
+      %{
+        link: %ClientUtils.RunLink{session: self(), run_id: 1},
+        shard?: false,
+        cli_formatter: spawn(fn -> Process.sleep(:infinity) end),
+        invalid_counter: 0
+      }
+    end
+
+    test "a test its module's setup_all failed reports that failure" do
+      reason = catch_error(raise "no database")
+      module = %ExUnit.TestModule{name: MyApp.SomeTest, state: {:failed, [{:error, reason, []}]}}
+
+      test = %ExUnit.Test{
+        name: :"test invalid",
+        module: MyApp.SomeTest,
+        state: {:invalid, module},
+        tags: %{file: __ENV__.file, line: 10}
+      }
+
+      ClientUtils.TestFormatter.handle_cast({:test_finished, test}, linked_state())
+
+      assert_received {:"$gen_cast",
+                       {:report,
+                        %{
+                          "event" => "test",
+                          "state" => "invalid",
+                          "name" => "invalid",
+                          "message" => "no database",
+                          "failure_line" => 10
+                        }}}
+    end
+  end
 end

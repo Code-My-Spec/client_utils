@@ -96,7 +96,9 @@ ExUnit.start(formatters: [{ClientUtils.TestFormatter, streaming: true, output_fi
 | ------------------------- | --------------------------------------------------------------------------- |
 | `EXUNIT_JSON_OUTPUT_FILE` | Path for JSON output file                                                   |
 | `EXUNIT_JSON_STREAMING`   | Enable streaming mode                                                       |
-| `CMS_RUN_EVENT_STREAM`    | Absolute path to append one JSON event per line to; the run outlives its harness |
+| `CMS_HARNESS_NODE`        | The harness node a run reports to; set, the run joins it and outlives it    |
+| `CMS_RUN_OUTPUT`          | File the linked run writes its own stdout and stderr to                     |
+| `CMS_RUN_RESULT`          | File a linked run writes its unacknowledged events to if no harness takes them |
 
 ## License
 
