@@ -30,9 +30,11 @@ defmodule ClientUtils.RunLink do
   # The variables that made this BEAM the run's node are for it alone: a test
   # that shells out to `mix` would otherwise boot a child under the same node
   # name ("the name cms_run_… seems to be in use by another Erlang node").
-  # Read once, then removed before any test runs.
+  # Read once, then removed before any test runs. The shard's numbering too: a
+  # run a test starts (a spex driving a fixture's suite) inherited it, reported
+  # its exit as one shard of several, and was never finished.
   @run_env ~w(ELIXIR_ERL_OPTIONS CMS_HARNESS_NODE CMS_HARNESS_COOKIE CMS_RUN_ID CMS_RUN_LISTENER
-              CMS_RUN_OUTPUT)
+              CMS_RUN_OUTPUT CMS_RUN_SHARD CMS_RUN_SHARDS)
 
   @doc """
   Join the harness named in the environment, or `nil` when none is named. A
@@ -47,11 +49,7 @@ defmodule ClientUtils.RunLink do
   end
 
   defp join_from_env(opts) do
-    run_env =
-      for name <- @run_env ++ ~w(CMS_RUN_SHARD CMS_RUN_SHARDS),
-          value = System.get_env(name),
-          into: %{},
-          do: {name, value}
+    run_env = for name <- @run_env, value = System.get_env(name), into: %{}, do: {name, value}
 
     Enum.each(@run_env, &System.delete_env/1)
 

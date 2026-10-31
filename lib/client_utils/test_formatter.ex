@@ -35,6 +35,10 @@ defmodule ClientUtils.TestFormatter do
       |> Keyword.put_new(:slowest, 0)
       |> Keyword.put_new(:slowest_modules, 0)
 
+    # One of a run's `CMS_RUN_SHARDS` processes: the run finishes once, when
+    # its runner exits, not when this shard does. Read before joining, which
+    # removes the variable.
+    shard? = System.get_env("CMS_RUN_SHARDS") not in [nil, ""]
     link = RunLink.join()
 
     # A linked run outlives its harness, and with it the pipe the CLI output
@@ -46,9 +50,7 @@ defmodule ClientUtils.TestFormatter do
         else: GenServer.start_link(ExUnit.CLIFormatter, cli_opts)
 
     config = %{
-      # One of a run's `CMS_RUN_SHARDS` processes: the run finishes once, when
-      # its runner exits, not when this shard does.
-      shard?: System.get_env("CMS_RUN_SHARDS") not in [nil, ""],
+      shard?: shard?,
       link: link,
       seed: opts[:seed],
       trace: opts[:trace],
