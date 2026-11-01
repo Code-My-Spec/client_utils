@@ -32,7 +32,8 @@ defmodule ClientUtils.RunLinkTest do
       demonitor: fn ref -> send(test, {:demonitored, ref}) end,
       send: fn dest, message -> send(test, {:sent, dest, message}) end,
       names: fn "host" -> ["cms_harness_200", "cms_app_300", "epmd_other"] end,
-      halt: fn status -> send(test, {:halted, status}) end
+      halt: fn status -> send(test, {:halted, status}) end,
+      set_cookie: fn node, cookie -> send(test, {:cookie, node, cookie}) end
     }
 
     {:ok, session} =
@@ -204,12 +205,53 @@ defmodule ClientUtils.RunLinkTest do
     assert_receive {:sent, {@listener, @restarted}, {:run_rejoin, ^run_id, _, ^session}}
   end
 
-  test "a run that no harness adopts waits; it never exits on its own", ctx do
+  test "a run that no harness adopts waits for one, within its ceiling", ctx do
     session = start(ctx)
     finishing = Task.async(fn -> Session.finish(session, 0) end)
 
     refute Task.yield(finishing, 200)
+    refute_received {:halted, _}
     Task.shutdown(finishing, :brutal_kill)
+  end
+
+  # Prod spex run 831's shards ran on for hours after their run was closed:
+  # nothing they could reach would ever adopt them.
+  test "a run that no harness adopts for its whole ceiling halts itself", ctx do
+    start(ctx, orphan_ms: 50)
+
+    assert_receive {:halted, 75}, 2_000
+  end
+
+  test "a harness gone for less than the ceiling does not halt the run", ctx do
+    up(ctx, @harness)
+    session = start(ctx, orphan_ms: 300)
+    run_id = ctx.run_id
+    assert_receive {:sent, _, {:run_rejoin, ^run_id, _, ^session}}
+    send(session, {:run_adopted, run_id})
+    assert_receive {:monitored, _, ref}
+
+    # Adopted for longer than the ceiling, then a restart that takes a while.
+    Process.sleep(400)
+    down(ctx, @harness)
+    send(session, {:DOWN, ref, :process, self(), :noconnection})
+    Process.sleep(150)
+    up(ctx, @restarted)
+    assert_receive {:sent, {@listener, @restarted}, {:run_rejoin, ^run_id, _, ^session}}, 1_000
+    send(session, {:run_adopted, run_id})
+
+    refute_receive {:halted, _}, 500
+  end
+
+  # A packaged harness's cookie is its release's own; the run keeps it for the
+  # harness alone (the rest of its node is back on the user's cookie).
+  test "the harness's cookie is set for each harness the run tries", ctx do
+    up(ctx, @restarted)
+    session = start(ctx, cookie: :harness_cookie)
+    run_id = ctx.run_id
+
+    assert_receive {:cookie, @harness, :harness_cookie}
+    assert_receive {:cookie, @restarted, :harness_cookie}
+    assert_receive {:sent, {@listener, @restarted}, {:run_rejoin, ^run_id, _, ^session}}
   end
 
   defp flush_sent do

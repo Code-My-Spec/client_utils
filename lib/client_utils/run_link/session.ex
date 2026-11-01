@@ -18,14 +18,21 @@ defmodule ClientUtils.RunLink.Session do
 
   `{:run_cancel, run_id}` halts the run. `finish/2`, from the run's exit,
   reports its exit status as the last event and waits until a harness has
-  acknowledged every event. There is no other way out: the run waits for a
-  harness.
+  acknowledged every event. The run waits for a harness, but not forever: one
+  that no harness has adopted for an hour (`:orphan_ms`) halts itself with
+  status 75. Nothing it can reach will ever take it, and its harness's own
+  ceiling (half that) has long passed.
+
+  The harness's cookie (`:cookie`) is set for each harness the run tries, so
+  the run's node can be on any other cookie (`ClientUtils.RunLink`).
   """
 
   use GenServer
 
   @retry_ms 1_000
   @adopt_ms 5_000
+  @orphan_ms :timer.hours(1)
+  @orphan_status 75
 
   @doc "Start the session, unlinked: a test crashing must not take the link with it."
   def start(opts) do
@@ -55,6 +62,9 @@ defmodule ClientUtils.RunLink.Session do
       shard: Keyword.get(opts, :shard),
       retry_ms: Keyword.get(opts, :retry_ms, @retry_ms),
       adopt_ms: Keyword.get(opts, :adopt_ms, @adopt_ms),
+      orphan_ms: Keyword.get(opts, :orphan_ms, @orphan_ms),
+      cookie: Keyword.get(opts, :cookie),
+      unadopted_since: System.monotonic_time(:millisecond),
       transport: Map.merge(transport(), Map.new(Keyword.get(opts, :transport, %{}))),
       output: redirect(Keyword.get(opts, :output)),
       seq: 0,
@@ -107,7 +117,7 @@ defmodule ClientUtils.RunLink.Session do
       state.transport.send.(dest, {:run_event, state.run_id, self(), seq, event})
     end)
 
-    {:noreply, %{state | connected: {node, ref}, refused: MapSet.new()}}
+    {:noreply, %{state | connected: {node, ref}, refused: MapSet.new(), unadopted_since: nil}}
   end
 
   def handle_info(
@@ -125,7 +135,19 @@ defmodule ClientUtils.RunLink.Session do
   def handle_info({:DOWN, ref, :process, _, _}, %{connected: {_node, ref, :pending}} = state),
     do: {:noreply, detach(state)}
 
-  def handle_info(:retry, %{connected: nil} = state), do: {:noreply, attach(state)}
+  def handle_info(:retry, %{connected: nil} = state) do
+    if orphaned?(state) do
+      IO.puts(
+        :stderr,
+        "CodeMySpec: no harness has adopted run #{state.run_id} in #{state.orphan_ms}ms; halting."
+      )
+
+      state.transport.halt.(@orphan_status)
+      {:noreply, state}
+    else
+      {:noreply, attach(state)}
+    end
+  end
 
   def handle_info(_message, state), do: {:noreply, state}
 
@@ -153,8 +175,13 @@ defmodule ClientUtils.RunLink.Session do
 
   defp detach(state) do
     Process.send_after(self(), :retry, state.retry_ms)
-    %{state | connected: nil}
+    %{state | connected: nil, unadopted_since: state.unadopted_since || now()}
   end
+
+  defp orphaned?(%{unadopted_since: nil}), do: false
+  defp orphaned?(state), do: now() - state.unadopted_since >= state.orphan_ms
+
+  defp now, do: System.monotonic_time(:millisecond)
 
   # A harness that does not serve this run: skipped until one adopts it.
   defp refuse(%{connected: {node, ref, :pending}} = state, node) do
@@ -164,12 +191,11 @@ defmodule ClientUtils.RunLink.Session do
 
   defp attach(state) do
     t = state.transport
+    candidates = candidates(state) -- MapSet.to_list(state.refused)
+    set_cookie(state, candidates)
 
     listening =
-      Enum.find(
-        candidates(state) -- MapSet.to_list(state.refused),
-        &(t.connect.(&1) and t.listening?.(&1, state.listener))
-      )
+      Enum.find(candidates, &(t.connect.(&1) and t.listening?.(&1, state.listener)))
 
     case listening do
       nil ->
@@ -199,6 +225,11 @@ defmodule ClientUtils.RunLink.Session do
     Enum.uniq([harness | others])
   end
 
+  defp set_cookie(%{cookie: nil}, _nodes), do: :ok
+
+  defp set_cookie(state, nodes),
+    do: Enum.each(nodes, &state.transport.set_cookie.(&1, state.cookie))
+
   defp redirect(nil), do: nil
   defp redirect(path), do: ClientUtils.RunLink.redirect_output(path)
 
@@ -212,7 +243,8 @@ defmodule ClientUtils.RunLink.Session do
       demonitor: &Process.demonitor(&1, [:flush]),
       send: &send/2,
       names: &epmd_names/1,
-      halt: &System.halt/1
+      halt: &System.halt/1,
+      set_cookie: &:erlang.set_cookie/2
     }
   end
 

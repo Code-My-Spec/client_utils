@@ -6,7 +6,7 @@ defmodule ClientUtils.MixProject do
   def project do
     [
       app: :client_utils,
-      version: "0.4.1",
+      version: "0.4.2",
       elixir: "~> 1.18",
       description: "ExUnit formatter with JSON output and distributed test coordination",
       package: package(),

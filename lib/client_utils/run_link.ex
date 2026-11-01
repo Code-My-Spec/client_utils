@@ -80,12 +80,16 @@ defmodule ClientUtils.RunLink do
               harness: harness,
               listener: String.to_atom(Map.get(run_env, "CMS_RUN_LISTENER", @default_listener)),
               output: shard_path(run_env["CMS_RUN_OUTPUT"], shard),
-              shard: shard
+              shard: shard,
+              # Booted with it (`-setcookie`), so the harness can halt a run
+              # that hangs before it gets here.
+              cookie: Node.get_cookie()
             ],
             opts
           )
         )
 
+      use_user_cookie()
       System.at_exit(fn status -> Session.finish(session, status) end)
       %__MODULE__{session: session, run_id: run_id}
     else
@@ -95,6 +99,31 @@ defmodule ClientUtils.RunLink do
   end
 
   defp hidden?, do: match?({:ok, _}, :init.get_argument(:hidden))
+
+  # The harness's cookie stays the session's, for the harness alone; every
+  # other node the run's tests start (`:peer`) reads the user's cookie file and
+  # was refused. Read where `erl` reads it (`auth`: the home directory, which
+  # on Windows is %USERPROFILE%, then the XDG config directory). With no file,
+  # the node keeps the cookie it booted with.
+  defp use_user_cookie do
+    with [path | _] <- Enum.filter(cookie_paths(), &File.regular?/1),
+         {:ok, contents} <- File.read(path),
+         cookie when cookie != "" <-
+           contents |> String.split(["\n", "\r"]) |> hd() |> String.trim() do
+      Node.set_cookie(String.to_atom(cookie))
+    end
+
+    :ok
+  end
+
+  defp cookie_paths do
+    xdg = Path.join(List.to_string(:filename.basedir(:user_config, ~c"erlang")), ".erlang.cookie")
+
+    case :init.get_argument(:home) do
+      {:ok, [[home] | _]} -> [Path.join(List.to_string(home), ".erlang.cookie"), xdg]
+      _ -> [xdg]
+    end
+  end
 
   # One of a run's `CMS_RUN_SHARDS` processes, each with its own files.
   defp shard(run_env) do
