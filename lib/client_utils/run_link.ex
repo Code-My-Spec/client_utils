@@ -148,9 +148,22 @@ defmodule ClientUtils.RunLink do
 
     for pid <- Process.list(),
         Process.info(pid, :group_leader) == {:group_leader, user},
-        do: Process.group_leader(pid, out)
+        do: follow(pid, out)
 
     path
+  end
+
+  @doc false
+  # A process can exit between the listing and the move, and moving a dead one
+  # raises: under load that took down the run's session as it started, and the
+  # run then never linked (it ran with no link and no results file).
+  @spec follow(pid(), pid()) :: :ok
+  def follow(pid, device) do
+    Process.group_leader(pid, device)
+    :ok
+  rescue
+    error in ArgumentError ->
+      if Process.alive?(pid), do: reraise(error, __STACKTRACE__), else: :ok
   end
 
   defp rename(name, pid) do
