@@ -1,6 +1,8 @@
 defmodule Mix.Tasks.Compile.Diagnostics do
   use Mix.Task.Compiler
 
+  @seen {__MODULE__, :seen}
+
   @moduledoc """
   Registers `after_compiler` hooks that write diagnostics to a JSONL file.
 
@@ -37,15 +39,30 @@ defmodule Mix.Tasks.Compile.Diagnostics do
   @impl true
   def run(_argv) do
     output = resolve_output()
+    Process.put(@seen, [])
 
     for compiler <- [:elixir, :app] do
       Mix.Task.Compiler.after_compiler(compiler, fn {status, diags} ->
-        write_diagnostics(output, diags)
+        record(output, diags)
         {status, diags}
       end)
     end
 
     {:noop, []}
+  end
+
+  @doc """
+  Adds one compiler's diagnostics to those already seen in this compile and
+  rewrites the file with all of them.
+
+  Each hook used to write only its own: `:app` runs after `:elixir` with none,
+  so the file was rewritten empty and every compiler warning was lost before
+  anything read it.
+  """
+  def record(output, diagnostics) do
+    seen = Process.get(@seen, []) ++ diagnostics
+    Process.put(@seen, seen)
+    write_diagnostics(output, seen)
   end
 
   @doc """
