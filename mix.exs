@@ -47,6 +47,8 @@ defmodule ClientUtils.MixProject do
   defp deps do
     [
       {:jason, "~> 1.0"},
+      {:phoenix_live_view, "~> 1.1"},
+      {:slipstream, "~> 1.1"},
       # Onboarding asks the server for this copy's preview address. Creating the
       # tunnel behind it needs a Cloudflare credential that must never ship in a
       # generated application, so the server does that and this asks.

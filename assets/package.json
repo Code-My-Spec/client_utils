@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "scripts": {"build": "esbuild widget.js --bundle --format=esm --target=es2022 --outfile=../priv/static/widget.js"},
+  "dependencies": {"html-to-image": "1.11.13"},
+  "devDependencies": {"esbuild": "0.25.12"}
+}
