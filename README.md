@@ -117,8 +117,22 @@ Commit `mix.lock`. `mix deps.get` uses that exact revision; advance it with
 `mix deps.update client_utils`, then test before deploying.
 
 Add `{ClientUtils.Widget, otp_app: :my_app}` before the endpoint in your
-supervision tree, and configure `:codemyspec_widget_url` and `:deploy_key` on
-`:my_app` at runtime. The deploy key stays in the backend.
+supervision tree, and configure `:codemyspec_widget_url` and
+`:codemyspec_widget_credentials_path` on `:my_app` at runtime. Authorize each host
+once as the project owner:
+
+```sh
+mix client_utils.widget.authorize --server https://codemyspec.com --project PROJECT_UUID --credentials /private/state/widget.json
+```
+
+Open the printed URL and approve the code. The command saves a widget-only refresh
+credential with mode 0600; mount that file as a private, persistent runtime secret
+and set `CODEMYSPEC_WIDGET_CREDENTIALS_PATH` to its path. Never commit it or place it
+under `priv/static`. Visitors never approve a device or receive this credential.
+The host obtains short-lived identity-bound socket tokens and renews them while
+connected. No deployment key is used to connect the widget. Revoke an installation
+at `/oauth/widgets`; existing socket tokens expire within 15 minutes, and renewal
+and reconnect are refused immediately after revocation. Reauthorize to replace it.
 
 ```elixir
 defmodule MyAppWeb.SupportWidgetLive do
@@ -140,8 +154,12 @@ existing Heroicons CSS and daisyUI theme, matching Phoenix's default styling.
 For existing generated widgets, replace the LiveView with the adapter above,
 remove the generated `Widget` and `WidgetClient` modules and their old Registry /
 DynamicSupervisor children, and delegate the verify controller's `create/2` to
-`ClientUtils.WidgetVerifyController`. Keep the existing deploy-key configuration
-and `/_cms/verify/widget` route.
+`ClientUtils.WidgetVerifyController`. Keep the `/_cms/verify/widget` route and its existing deploy-key authentication
+only if using CodeMySpec's separate inbound provisioning probe. That probe does
+not authorize outgoing widget connections. Authorize the host with device flow
+and replace the outgoing widget's deploy-key config with the private credential
+path. Existing server deploy-key socket support remains for older installations;
+new shared clients never fall back to it.
 
 Browser assets (including screenshot capture) ship prebuilt. To change them:
 `npm ci --prefix assets && npm run build --prefix assets`; commit the source,

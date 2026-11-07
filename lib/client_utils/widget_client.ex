@@ -3,7 +3,7 @@ defmodule ClientUtils.WidgetClient do
   Per-user Slipstream client bridging a logged-in user's support widget to
   CodeMySpec.
 
-  Connects **server-side** with the project deploy key (the key never reaches
+  Connects **server-side** with an owner-approved installation credential (which never reaches
   the browser), joins `conversation:<user_id>`, and relays messages between
   CodeMySpec and the user's `SupportWidgetLive` over local PubSub. Chat and
   "Report a problem" both ride this one connection. Reconnects with backoff.
@@ -57,7 +57,15 @@ defmodule ClientUtils.WidgetClient do
 
   @impl Slipstream
   def handle_join(_topic, _reply, socket) do
-    socket = socket |> assign(:reconnect_attempts, 0) |> assign(:connected, true)
+    if timer = socket.assigns[:renewal_timer], do: Process.cancel_timer(timer)
+    timer = Process.send_after(self(), :renew_authorization, 720_000)
+
+    socket =
+      socket
+      |> assign(:reconnect_attempts, 0)
+      |> assign(:connected, true)
+      |> assign(:renewal_timer, timer)
+
     broadcast(socket, {:connected, true})
 
     socket =
@@ -176,7 +184,7 @@ defmodule ClientUtils.WidgetClient do
     {:noreply, socket}
   end
 
-  # "Report a problem" rides the same deploy-key connection as chat — pushed to
+  # "Report a problem" rides the same authenticated connection as chat — pushed to
   # CodeMySpec as a `submit_feedback` event, which files an issue on the project.
   def handle_cast({:submit_feedback, payload}, socket) do
     push(socket, socket.assigns.topic, "submit_feedback", payload)
@@ -204,6 +212,23 @@ defmodule ClientUtils.WidgetClient do
   end
 
   @impl Slipstream
+  def handle_info(:renew_authorization, socket) do
+    delay =
+      with {:ok, token} <-
+             ClientUtils.WidgetAuth.socket_token(
+               socket.assigns.user_id,
+               socket.assigns.user_email
+             ),
+           {:ok, _ref} <- push(socket, socket.assigns.topic, "reauth", %{"socket_token" => token}) do
+        720_000
+      else
+        _ -> 30_000
+      end
+
+    timer = Process.send_after(self(), :renew_authorization, delay)
+    {:noreply, assign(socket, :renewal_timer, timer)}
+  end
+
   def handle_info(:reconnect, socket) do
     case build_uri(socket.assigns.user_id, socket.assigns.user_email, socket.assigns.origin) do
       {:ok, uri} ->
@@ -242,38 +267,13 @@ defmodule ClientUtils.WidgetClient do
 
   defp backoff(attempts), do: min(trunc(:math.pow(2, attempts) * 1000), 10_000)
 
-  # The deploy key is self-identifying on CodeMySpec (blind index), so the
-  # widget presents only the key — no project id.
   defp build_uri(user_id, user_email, origin) do
-    base = Widget.config(:codemyspec_widget_url)
-    deploy_key = Widget.config(:deploy_key)
-
-    if present?(base) and present?(deploy_key) do
-      query =
-        URI.encode_query(%{
-          "deploy_key" => deploy_key,
-          "user_id" => user_id,
-          "user_email" => user_email,
-          # Where this app is actually running. CodeMySpec stamps it on the
-          # messages that arrive and uses it to tell a widget that works for
-          # visitors apart from one that has only ever worked on the author's
-          # laptop — the same deploy key serves both.
-          #
-          # Handed in by the caller rather than read from the endpoint here:
-          # this module is in the app namespace and the endpoint is in the web
-          # one, and reaching across is a boundary violation the compiler
-          # reports on every build of the generated project.
-          "origin" => origin,
-          "vsn" => "2.0.0"
-        })
-
+    with base when is_binary(base) and base != "" <- Widget.config(:codemyspec_widget_url),
+         {:ok, token} <- ClientUtils.WidgetAuth.socket_token(user_id, user_email) do
+      query = URI.encode_query(%{"socket_token" => token, "origin" => origin, "vsn" => "2.0.0"})
       {:ok, "#{base}/websocket?#{query}"}
     else
-      {:error, :not_configured}
+      _ -> {:error, :not_configured}
     end
   end
-
-  defp present?(nil), do: false
-  defp present?(""), do: false
-  defp present?(_), do: true
 end
