@@ -27,8 +27,8 @@ defmodule ClientUtils.WidgetClient do
     user_email = opts.user_email
     origin = Map.get(opts, :origin)
 
-    case build_uri(user_id, user_email, origin) do
-      {:ok, uri} ->
+    case Widget.client() do
+      %{server_url: server, credentials_path: path} when is_binary(server) and is_binary(path) ->
         socket =
           new_socket()
           |> assign(:user_id, user_id)
@@ -40,12 +40,13 @@ defmodule ClientUtils.WidgetClient do
           |> assign(:reconnect_attempts, 0)
           |> assign(:queued, [])
           |> assign(:awaiting, %{})
-          |> connect!(uri: uri)
+          |> assign(:authorizing, false)
 
+        send(self(), :reconnect)
         {:ok, socket}
 
-      {:error, reason} ->
-        Logger.warning("[WidgetClient] cannot connect: #{inspect(reason)}")
+      _ ->
+        Logger.warning("[WidgetClient] cannot connect: not configured")
         :ignore
     end
   end
@@ -193,6 +194,7 @@ defmodule ClientUtils.WidgetClient do
 
   @impl Slipstream
   def handle_disconnect(reason, socket) do
+    if timer = socket.assigns[:renewal_timer], do: Process.cancel_timer(timer)
     attempts = socket.assigns.reconnect_attempts
     delay = backoff(attempts)
     Logger.info("[WidgetClient] disconnected (#{inspect(reason)}), reconnecting in #{delay}ms")
@@ -212,33 +214,63 @@ defmodule ClientUtils.WidgetClient do
   end
 
   @impl Slipstream
-  def handle_info(:renew_authorization, socket) do
-    delay =
-      with {:ok, token} <-
-             ClientUtils.WidgetAuth.socket_token(
-               socket.assigns.user_id,
-               socket.assigns.user_email
-             ),
-           {:ok, _ref} <- push(socket, socket.assigns.topic, "reauth", %{"socket_token" => token}) do
-        720_000
-      else
-        _ -> 30_000
-      end
+  def handle_info(:renew_authorization, socket), do: {:noreply, authorize(socket, :renew)}
 
-    timer = Process.send_after(self(), :renew_authorization, delay)
-    {:noreply, assign(socket, :renewal_timer, timer)}
+  def handle_info(:reconnect, %{assigns: %{connected: true}} = socket), do: {:noreply, socket}
+  def handle_info(:reconnect, socket), do: {:noreply, authorize(socket, :connect)}
+
+  def handle_info({:authorized, mode, result}, socket) do
+    socket = assign(socket, :authorizing, false)
+    {:noreply, apply_authorization(socket, mode, result)}
   end
 
-  def handle_info(:reconnect, socket) do
-    case build_uri(socket.assigns.user_id, socket.assigns.user_email, socket.assigns.origin) do
-      {:ok, uri} ->
-        {:ok, socket} = connect(socket, uri: uri)
-        {:noreply, socket}
+  defp authorize(%{assigns: %{authorizing: true}} = socket, _mode), do: socket
 
-      {:error, _reason} ->
-        Process.send_after(self(), :reconnect, backoff(socket.assigns.reconnect_attempts))
-        {:noreply, socket}
+  defp authorize(socket, mode) do
+    parent = self()
+    client = Widget.client()
+
+    {:ok, _} =
+      Task.start(fn ->
+        result =
+          ClientUtils.CodeMySpecClient.widget_socket_token(
+            client,
+            socket.assigns.user_id,
+            socket.assigns.user_email
+          )
+
+        send(parent, {:authorized, mode, result})
+      end)
+
+    assign(socket, :authorizing, true)
+  end
+
+  defp apply_authorization(socket, :connect, {:ok, token}) do
+    {:ok, socket} = connect(socket, uri: build_uri(token, socket.assigns.origin))
+    socket
+  end
+
+  defp apply_authorization(%{assigns: %{connected: false}} = socket, :renew, result),
+    do: apply_authorization(socket, :connect, result)
+
+  defp apply_authorization(socket, :renew, {:ok, token}) do
+    case push(socket, socket.assigns.topic, "reauth", %{"socket_token" => token}) do
+      {:ok, _} -> schedule_renewal(socket, 720_000)
+      _ -> schedule_renewal(socket, 30_000)
     end
+  end
+
+  defp apply_authorization(socket, :renew, _), do: schedule_renewal(socket, 30_000)
+
+  defp apply_authorization(socket, :connect, _) do
+    Process.send_after(self(), :reconnect, 30_000)
+    socket
+  end
+
+  defp schedule_renewal(socket, delay) do
+    if timer = socket.assigns[:renewal_timer], do: Process.cancel_timer(timer)
+    timer = Process.send_after(self(), :renew_authorization, delay)
+    assign(socket, :renewal_timer, timer)
   end
 
   defp push_confirmed(socket, from, body) do
@@ -267,13 +299,8 @@ defmodule ClientUtils.WidgetClient do
 
   defp backoff(attempts), do: min(trunc(:math.pow(2, attempts) * 1000), 10_000)
 
-  defp build_uri(user_id, user_email, origin) do
-    with base when is_binary(base) and base != "" <- Widget.config(:codemyspec_widget_url),
-         {:ok, token} <- ClientUtils.WidgetAuth.socket_token(user_id, user_email) do
-      query = URI.encode_query(%{"socket_token" => token, "origin" => origin, "vsn" => "2.0.0"})
-      {:ok, "#{base}/websocket?#{query}"}
-    else
-      _ -> {:error, :not_configured}
-    end
+  defp build_uri(token, origin) do
+    query = URI.encode_query(%{"socket_token" => token, "origin" => origin, "vsn" => "2.0.0"})
+    "#{Widget.socket_url()}/websocket?#{query}"
   end
 end

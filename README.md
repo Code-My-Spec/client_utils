@@ -117,22 +117,43 @@ Commit `mix.lock`. `mix deps.get` uses that exact revision; advance it with
 `mix deps.update client_utils`, then test before deploying.
 
 Add `{ClientUtils.Widget, otp_app: :my_app}` before the endpoint in your
-supervision tree, and configure `:codemyspec_widget_url` and
-`:codemyspec_widget_credentials_path` on `:my_app` at runtime. Authorize each host
+supervision tree, and configure `:codemyspec_server_url` and
+`:codemyspec_credentials_path` on `:my_app` at runtime. Authorize each host
 once as the project owner:
 
 ```sh
-mix client_utils.widget.authorize --server https://codemyspec.com --project PROJECT_UUID --credentials /private/state/widget.json
+mix client_utils.authorize --server https://codemyspec.com --project PROJECT_UUID --credentials /private/state/codemyspec.json
 ```
 
-Open the printed URL and approve the code. The command saves a widget-only refresh
+Open the printed URL and approve the code. The command saves a project-scoped refresh
 credential with mode 0600; mount that file as a private, persistent runtime secret
-and set `CODEMYSPEC_WIDGET_CREDENTIALS_PATH` to its path. Never commit it or place it
+and set `CODEMYSPEC_CREDENTIALS_PATH` to its path. Never commit it or place it
 under `priv/static`. Visitors never approve a device or receive this credential.
 The host obtains short-lived identity-bound socket tokens and renews them while
 connected. No deployment key is used to connect the widget. Revoke an installation
-at `/oauth/widgets`; existing socket tokens expire within 15 minutes, and renewal
+at `/oauth/installations`; existing socket tokens expire within 15 minutes, and renewal
 and reconnect are refused immediately after revocation. Reauthorize to replace it.
+
+`ClientUtils.CodeMySpecClient` owns device authorization, private credential storage,
+renewal, and authenticated HTTP requests. It works independently of the widget's
+supervisor. Configure `CODEMYSPEC_SERVER_URL` as the HTTPS server origin and map it
+to `:codemyspec_server_url`; map `CODEMYSPEC_CREDENTIALS_PATH` to
+`:codemyspec_credentials_path` in runtime config.
+
+```elixir
+client = ClientUtils.CodeMySpecClient.new(:my_app)
+ClientUtils.CodeMySpecClient.upsert_user(client, %{
+  external_id: to_string(user.id), email: user.email, name: user.name
+})
+```
+
+Call this after registration or profile changes. It returns `{:ok, response}` or
+`{:error, reason}`; updates are keyed by email within the approved project. The
+host cannot override that project in its payload. The setup command requests
+`widget users` permissions; use `--scope widget` or `--scope users` for a narrower
+installation. The owner sees the permissions before approving. Existing
+widget-only grants do not gain user access: reauthorize to approve both. Content
+is not included. The widget itself uses the same client's `widget_socket_token/3`.
 
 ```elixir
 defmodule MyAppWeb.SupportWidgetLive do
