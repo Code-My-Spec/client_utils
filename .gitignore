@@ -36,3 +36,5 @@ fixtures/shared_test_events.json
 
 # ExUnit @tag :tmp_dir output.
 /tmp/
+
+/assets/node_modules/

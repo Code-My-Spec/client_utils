@@ -17,6 +17,28 @@ defmodule Mix.Tasks.Compile.DiagnosticsTest do
     end
   end
 
+  describe "record/2" do
+    test "a later compiler with nothing to say keeps what an earlier one found" do
+      Mix.Tasks.Compile.Diagnostics.run([])
+      warning = build_diagnostic(message: "this clause cannot match", severity: :warning)
+
+      Mix.Tasks.Compile.Diagnostics.record(@output_file, [warning])
+      Mix.Tasks.Compile.Diagnostics.record(@output_file, [])
+
+      assert [%{"message" => "this clause cannot match"}] = read_jsonl(@output_file)
+    end
+
+    test "a new compile starts from nothing" do
+      Mix.Tasks.Compile.Diagnostics.run([])
+      Mix.Tasks.Compile.Diagnostics.record(@output_file, [build_diagnostic(message: "old")])
+
+      Mix.Tasks.Compile.Diagnostics.run([])
+      Mix.Tasks.Compile.Diagnostics.record(@output_file, [])
+
+      assert read_jsonl(@output_file) == []
+    end
+  end
+
   describe "write_diagnostics/2" do
     test "writes JSONL file from extra diagnostics" do
       diag = build_diagnostic(message: "test warning", severity: :warning)
