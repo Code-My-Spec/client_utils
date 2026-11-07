@@ -125,7 +125,7 @@ once as the project owner:
 mix client_utils.authorize --server https://codemyspec.com --project PROJECT_UUID --credentials /private/state/codemyspec.json
 ```
 
-Open the printed URL and approve the code. The command saves a project-scoped refresh
+Open the printed URL and approve the code. The command saves the OAuth client secret and project-scoped refresh
 credential with mode 0600; mount that file as a private, persistent runtime secret
 and set `CODEMYSPEC_CREDENTIALS_PATH` to its path. Never commit it or place it
 under `priv/static`. Visitors never approve a device or receive this credential.
@@ -185,3 +185,8 @@ new shared clients never fall back to it.
 Browser assets (including screenshot capture) ship prebuilt. To change them:
 `npm ci --prefix assets && npm run build --prefix assets`; commit the source,
 lockfile, and `priv/static/widget.js`. Consumers do not install npm packages.
+
+Installation authorization uses the standard `/oauth/token` refresh grant. The
+private credential file is updated with the returned refresh token before making
+an API request. Installations created with the earlier custom widget credential
+must run `mix client_utils.authorize` again after the server upgrade.

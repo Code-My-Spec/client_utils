@@ -15,7 +15,8 @@ defmodule ClientUtils.CodeMySpecClient do
            http_request(server, :post, "/oauth/register", %{
              client_name: "CodeMySpec application",
              redirect_uris: [],
-             grant_types: [@device_grant]
+             grant_types: [@device_grant, "refresh_token"],
+             scope: Enum.join(scopes, " ")
            }),
          {:ok, grant} <-
            http_request(server, :post, "/oauth/device/code", %{
@@ -26,6 +27,7 @@ defmodule ClientUtils.CodeMySpecClient do
       {:ok,
        Map.merge(grant, %{
          "client_id" => client["client_id"],
+         "client_secret" => client["client_secret"],
          "server" => server,
          "project_id" => project_id,
          "scope" => Enum.join(scopes, " ")
@@ -45,7 +47,7 @@ defmodule ClientUtils.CodeMySpecClient do
          :ok <-
            persist(
              path,
-             Map.take(grant, ["client_id", "server", "project_id"])
+             Map.take(grant, ["client_id", "client_secret", "server", "project_id"])
              |> Map.put("refresh_token", refresh)
            ) do
       :ok
@@ -73,12 +75,18 @@ defmodule ClientUtils.CodeMySpecClient do
 
   def request(%{server_url: server, credentials_path: path}, method, "/" <> _ = route, body)
       when is_binary(server) and is_binary(path) do
-    with {:ok, %{"client_id" => id, "refresh_token" => refresh}} <- credentials(path, server),
-         {:ok, %{"access_token" => access}} <-
-           http_request(server, :post, "/api/client/token", %{
+    with {:ok,
+          %{"client_id" => id, "client_secret" => secret, "refresh_token" => refresh} = stored} <-
+           credentials(path, server),
+         {:ok, %{"access_token" => access, "refresh_token" => renewed}} <-
+           http_request(server, :post, "/oauth/token", %{
+             grant_type: "refresh_token",
              client_id: id,
+             client_secret: secret,
              refresh_token: refresh
-           }) do
+           }),
+         true <- is_binary(renewed) and renewed != "",
+         :ok <- persist(path, Map.put(stored, "refresh_token", renewed)) do
       http_request(server, method, route, body, [{"authorization", "Bearer " <> access}])
     else
       {:error, _} = error -> error
