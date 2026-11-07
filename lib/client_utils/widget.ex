@@ -32,6 +32,28 @@ defmodule ClientUtils.Widget do
     Application.get_env(app, key)
   end
 
+  @doc "The host's shared CodeMySpec client, also usable independently of the widget."
+  def client do
+    {:ok, app} = Registry.meta(ClientUtils.WidgetRegistry, :otp_app)
+    ClientUtils.CodeMySpecClient.new(app)
+  end
+
+  def socket_url do
+    case client().server_url do
+      url when is_binary(url) ->
+        uri = URI.parse(url)
+
+        URI.to_string(%{
+          uri
+          | scheme: if(uri.scheme == "https", do: "wss", else: "ws"),
+            path: "/widget"
+        })
+
+      _ ->
+        nil
+    end
+  end
+
   @registry ClientUtils.WidgetRegistry
   @supervisor ClientUtils.WidgetSupervisor
 
