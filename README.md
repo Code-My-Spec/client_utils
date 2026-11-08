@@ -110,14 +110,13 @@ an authentication adapter and configuration. Chat and issue reports go directly
 from the host backend to CodeMySpec; there is no offline store.
 
 ```elixir
-{:client_utils, github: "Code-My-Spec/client_utils", branch: "main"}
+{:client_utils, github: "Code-My-Spec/client_utils", ref: "REVIEWED_COMMIT_SHA"}
 ```
 
-Commit `mix.lock`. `mix deps.get` uses that exact revision; advance it with
-`mix deps.update client_utils`, then test before deploying.
+Use the reviewed commit selected by your installer and commit `mix.lock`. Update the explicit ref deliberately, run `mix deps.update client_utils`, and test before deploying.
 
 Add `{ClientUtils.Widget, otp_app: :my_app}` before the endpoint in your
-supervision tree, and configure `:codemyspec_server_url` and
+supervision tree (it returns `:ignore` until both configuration values are set), and configure `:codemyspec_server_url` and
 `:codemyspec_credentials_path` on `:my_app` at runtime. Authorize each host
 once as the project owner:
 
@@ -150,7 +149,7 @@ ClientUtils.CodeMySpecClient.upsert_user(client, %{
 Call this after registration or profile changes. It returns `{:ok, response}` or
 `{:error, reason}`; updates are keyed by email within the approved project. The
 host cannot override that project in its payload. The setup command requests
-`widget users` permissions; use `--scope widget` or `--scope users` for a narrower
+`widget` permission; use `--scope "widget users"` to explicitly request both, or `--scope users` for user-only
 installation. The owner sees the permissions before approving. Existing
 widget-only grants do not gain user access: reauthorize to approve both. Content
 is not included. The widget itself uses the same client's `widget_socket_token/3`.

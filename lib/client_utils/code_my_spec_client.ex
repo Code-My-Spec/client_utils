@@ -10,7 +10,7 @@ defmodule ClientUtils.CodeMySpecClient do
     }
   end
 
-  def begin_authorization(server, project_id, scopes \\ ["widget", "users"]) do
+  def begin_authorization(server, project_id, scopes \\ ["widget"]) do
     with {:ok, client} <-
            http_request(server, :post, "/oauth/register", %{
              client_name: "CodeMySpec application",

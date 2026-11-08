@@ -17,6 +17,18 @@ defmodule ClientUtils.Widget do
   def start_link(opts) do
     app = Keyword.fetch!(opts, :otp_app)
 
+    if configured?(app), do: start_configured(app), else: :ignore
+  end
+
+  @doc "Whether both the backend server URL and private credential path are configured."
+  def configured?(app) do
+    Enum.all?([:codemyspec_server_url, :codemyspec_credentials_path], fn key ->
+      value = Application.get_env(app, key)
+      is_binary(value) and String.trim(value) != ""
+    end)
+  end
+
+  defp start_configured(app) do
     children = [
       {Registry, keys: :unique, name: ClientUtils.WidgetRegistry, meta: [otp_app: app]},
       {Phoenix.PubSub, name: ClientUtils.WidgetPubSub},
@@ -81,6 +93,12 @@ defmodule ClientUtils.Widget do
   could attribute them to the site that sent them.
   """
   def ensure_started(user_id, user_email, origin \\ nil) do
+    if Process.whereis(@supervisor),
+      do: start_client(user_id, user_email, origin),
+      else: {:error, :not_configured}
+  end
+
+  defp start_client(user_id, user_email, origin) do
     spec =
       {WidgetClient, [user_id: to_string(user_id), user_email: user_email, origin: origin]}
 
