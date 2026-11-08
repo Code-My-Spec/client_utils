@@ -26,7 +26,7 @@ defmodule Mix.Tasks.ClientUtils.Authorize do
     case ClientUtils.CodeMySpecClient.begin_authorization(
            server,
            opts[:project],
-           String.split(opts[:scope] || "widget users")
+           String.split(opts[:scope] || "widget")
          ) do
       {:ok, grant} ->
         Mix.shell().info(

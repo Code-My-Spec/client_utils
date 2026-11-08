@@ -8,7 +8,7 @@ defmodule ClientUtils.SupportWidgetLive do
       lands in the project's CodeMySpec issue queue.
 
   Both ride the same per-user `WidgetClient` Slipstream connection, authenticated
-  by the project deploy key — the key never reaches the browser. Chat relays
+  with an owner-approved installation credential that never reaches the browser. Chat relays
   `send_message`/`new_message`; "Report a problem" pushes a `submit_feedback`
   event on the same conversation topic. Shared by applications through `client_utils`.
   """
@@ -67,14 +67,19 @@ defmodule ClientUtils.SupportWidgetLive do
     # own presence probe — renders the launcher and opens nothing, so scraping
     # the site cannot spawn connections.
     if connected?(socket) do
-      Widget.ensure_started(identity.id, identity.email, socket.endpoint.url())
-      Phoenix.PubSub.subscribe(ClientUtils.WidgetPubSub, Widget.topic(identity.id))
-      %{messages: messages, connected: connected} = Widget.state(identity.id)
+      case Widget.ensure_started(identity.id, identity.email, socket.endpoint.url()) do
+        {:ok, _pid} ->
+          Phoenix.PubSub.subscribe(ClientUtils.WidgetPubSub, Widget.topic(identity.id))
+          %{messages: messages, connected: connected} = Widget.state(identity.id)
 
-      {:ok,
-       socket
-       |> assign(:messages, messages)
-       |> assign(:widget_state, widget_state(connected)), layout: false}
+          {:ok,
+           socket
+           |> assign(:messages, messages)
+           |> assign(:widget_state, widget_state(connected)), layout: false}
+
+        {:error, _reason} ->
+          {:ok, assign(socket, :widget_state, "unavailable"), layout: false}
+      end
     else
       {:ok, socket, layout: false}
     end
