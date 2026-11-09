@@ -13,7 +13,7 @@ An ExUnit formatter with JSON output and distributed test coordination. Designed
 
 ```elixir
 def deps do
-  [{:client_utils, "~> 0.1.0"}]
+  [{:client_utils, "~> 0.5.0"}]
 end
 ```
 
