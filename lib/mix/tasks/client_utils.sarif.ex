@@ -71,14 +71,13 @@ defmodule Mix.Tasks.ClientUtils.Sarif do
 
   defp results(_command, _args, _out, 0), do: []
 
-  defp results("mix", ["test" | _], out, _status) do
+  # Any command: `mix spex` and recipes that wrap `mix test` print failures the same way.
+  defp results(_command, _args, out, _status) do
     case test_failures(out) do
       [] -> tail(out)
       failures -> failures
     end
   end
-
-  defp results(_command, _args, out, _status), do: tail(out)
 
   defp tail(out),
     do: [%{"level" => "error", "message" => %{"text" => String.slice(out, -4000, 4000)}}]
