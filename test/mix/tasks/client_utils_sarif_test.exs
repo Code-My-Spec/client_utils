@@ -18,7 +18,17 @@ defmodule Mix.Tasks.ClientUtils.SarifTest do
 
     assert %{
              "runs" => [
-               %{"results" => [%{"level" => "error", "message" => %{"text" => "boom\n"}}]}
+               %{
+                 "results" => [%{"level" => "error", "message" => %{"text" => "boom\n"}}],
+                 "invocations" => [
+                   %{
+                     "exitCode" => 3,
+                     "arguments" => ["-c", "echo boom; exit 3"],
+                     "startTimeUtc" => "20" <> _,
+                     "endTimeUtc" => "20" <> _
+                   }
+                 ]
+               }
              ]
            } =
              fail |> File.read!() |> Jason.decode!()

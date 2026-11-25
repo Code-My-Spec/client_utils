@@ -20,12 +20,25 @@ defmodule Mix.Tasks.ClientUtils.Sarif do
   def run([output, "--" | [command | args]]) do
     name = output |> Path.basename() |> String.replace_suffix(".sarif", "")
 
+    started_at = DateTime.utc_now()
     started = System.monotonic_time(:millisecond)
     {out, status} = System.cmd(command, args, stderr_to_stdout: true)
     took_ms = System.monotonic_time(:millisecond) - started
 
+    invocation = %{
+      "arguments" => args,
+      "exitCode" => status,
+      "executionSuccessful" => status == 0,
+      "startTimeUtc" => DateTime.to_iso8601(started_at),
+      "endTimeUtc" => DateTime.to_iso8601(DateTime.utc_now())
+    }
+
     File.mkdir_p!(Path.dirname(output))
-    File.write!(output, Jason.encode!(sarif(name, results(command, args, out, status))))
+
+    File.write!(
+      output,
+      Jason.encode!(sarif(name, invocation, results(command, args, out, status)))
+    )
 
     merge_meta(Path.dirname(output), %{
       "analyzer_calls" => %{name => Enum.join([command | args], " ")},
@@ -62,10 +75,16 @@ defmodule Mix.Tasks.ClientUtils.Sarif do
     File.write!(path, Jason.encode!(merged))
   end
 
-  defp sarif(name, results) do
+  defp sarif(name, invocation, results) do
     %{
       "version" => "2.1.0",
-      "runs" => [%{"tool" => %{"driver" => %{"name" => name}}, "results" => results}]
+      "runs" => [
+        %{
+          "tool" => %{"driver" => %{"name" => name}},
+          "invocations" => [invocation],
+          "results" => results
+        }
+      ]
     }
   end
 
