@@ -62,6 +62,11 @@ defmodule ClientUtils.MixProject do
       # it; every Phoenix app already has it, which is every app that could want
       # the plug.
       {:plug, "~> 1.0", optional: true},
+      # For the Credo checks in `ClientUtils.Check` and journey coverage, which
+      # compile and run only where the project has them.
+      {:credo, "~> 1.7", optional: true, runtime: false},
+      {:yaml_elixir, "~> 2.11", optional: true},
+      {:jsv, "~> 0.27", only: :test},
       {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end

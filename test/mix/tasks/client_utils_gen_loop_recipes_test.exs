@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.ClientUtils.Gen.LoopRecipesTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   @moduletag :tmp_dir
 
