@@ -12,7 +12,10 @@ if Code.ensure_loaded?(Credo.Check) do
       base_priority: :high,
       category: :warning,
       run_on_all: true,
-      param_defaults: [journeys: ".code_my_spec/journeys/*.yml"],
+      param_defaults: [
+        journeys: ".code_my_spec/journeys/*.yml",
+        stories: ".code_my_spec/stories/*.yml"
+      ],
       explanations: [
         check: """
         A journey is covered when its walk tests every stage, in order.
@@ -29,10 +32,14 @@ if Code.ensure_loaded?(Credo.Check) do
             test "the newcomer registers and lands signed in", ctx do
 
         Flagged: a journey with no test file, a stage with no test, a tag naming
-        no stage of the journey, a stage out of order, and a journey file that
-        names no journey. A stage no walk can test is removed from the YAML.
+        no stage of the journey, a stage out of order, a journey file that
+        names no journey, and a stage's `stories:` id that no
+        `.code_my_spec/stories/*.yml` has. A stage no walk can test is removed from the YAML.
         """,
-        params: [journeys: "The glob of the journey files."]
+        params: [
+          journeys: "The glob of the journey files.",
+          stories: "The glob of the story files; none found, no story is checked."
+        ]
       ]
 
     @doc false
@@ -51,14 +58,19 @@ if Code.ensure_loaded?(Credo.Check) do
           do: untested(journeys, walks, params),
           else: []
 
-      append_issues_and_timings(walk_issues ++ missing, exec)
+      stories = Params.get(params, :stories, __MODULE__)
+      unknown = unknown_stories(journeys, Path.wildcard(stories), params)
+
+      append_issues_and_timings(walk_issues ++ missing ++ unknown, exec)
       :ok
     end
 
     defp read_journey(path) do
       {:ok, yaml} = YamlElixir.read_from_file(path)
-      ids = for stage <- yaml["stages"] || [], do: stage["id"]
-      {Path.basename(path, ".yml"), %{path: path, ids: ids}}
+      stages = yaml["stages"] || []
+      ids = for stage <- stages, do: stage["id"]
+      stories = for stage <- stages, story <- stage["stories"] || [], do: {stage["id"], story}
+      {Path.basename(path, ".yml"), %{path: path, ids: ids, stories: stories}}
     end
 
     defp walk?(%SourceFile{filename: f}), do: f =~ ~r{(^|/)test/journeys/[^/]+_test\.exs$}
@@ -105,6 +117,28 @@ if Code.ensure_loaded?(Credo.Check) do
       for {slug, %{path: path}} <- Enum.sort(journeys), slug not in tested do
         source = path |> File.read!() |> SourceFile.parse(path)
         issue(IssueMeta.for(source, params), "journey #{slug} has no test in test/journeys/", 1)
+      end
+    end
+
+    defp unknown_stories(_journeys, [], _params), do: []
+
+    defp unknown_stories(journeys, story_files, params) do
+      known = MapSet.new(story_files, &story_id/1)
+
+      for {_slug, %{path: path, stories: refs}} <- Enum.sort(journeys),
+          {stage, story} <- refs,
+          story not in known do
+        text = File.read!(path)
+        line = Enum.find_index(String.split(text, "\n"), &(&1 =~ story)) || 0
+        meta = IssueMeta.for(SourceFile.parse(text, path), params)
+        issue(meta, "stage #{stage} names story #{story}, which no story file has", line + 1)
+      end
+    end
+
+    defp story_id(path) do
+      case Regex.run(~r/^id: *"?([^"\s]+)/m, File.read!(path)) do
+        [_, id] -> id
+        nil -> nil
       end
     end
 

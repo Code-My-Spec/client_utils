@@ -79,6 +79,26 @@ defmodule ClientUtils.Evidence.JourneyEvidenceTest do
     assert out =~ "no CTRF report holds a journey test"
   end
 
+  test "a stage's story that no story file has is flagged", %{dir: dir} do
+    File.rm!(Path.join(dir, ".code_my_spec/journeys/ghost.yml"))
+    write!(dir, ".code_my_spec/stories/1-start.yml", "id: kept1234\ntitle: Starts\n")
+
+    write!(dir, ".code_my_spec/journeys/walk.yml", """
+    stages:
+      - id: starts
+        stories: [kept1234]
+      - id: ends
+        stories: [gone5678]
+    """)
+
+    {sarif, _} = credo(dir)
+
+    assert [%{"message" => %{"text" => text}}] =
+             JSON.decode!(sarif)["runs"] |> hd() |> Map.fetch!("results")
+
+    assert text == "stage ends names story gone5678, which no story file has"
+  end
+
   test "a report made at another tree is stale", %{dir: dir} do
     File.rm!(Path.join(dir, ".code_my_spec/journeys/ghost.yml"))
     write!(dir, ".gitignore", "/_build/\n/deps/\n/.code_my_spec/evidence/\n")
@@ -117,7 +137,10 @@ defmodule ClientUtils.Evidence.JourneyEvidenceTest do
             checks: %{
               enabled: [
                 {ClientUtils.Check.JourneyCoverage,
-                 [journeys: Path.join(dir, ".code_my_spec/journeys/*.yml")]}
+                 [
+                   journeys: Path.join(dir, ".code_my_spec/journeys/*.yml"),
+                   stories: Path.join(dir, ".code_my_spec/stories/*.yml")
+                 ]}
               ]
             }
           }
