@@ -15,7 +15,10 @@
 #                        module), tags, and message and trace when it failed
 #   results.environment  commit (git rev-parse HEAD), branchName, and
 #                        extra["codemyspec.tree"], the tree tested: HEAD plus
-#                        every uncommitted and untracked (not ignored) file
+#                        every uncommitted and untracked (not ignored) file,
+#                        plus whatever the suite put in
+#                        Application.put_env(:client_utils, :ctrf_extra, %{...})
+#                        while it ran (a journey's driver, say)
 #
 # Every time is integer milliseconds: durations, start and stop.
 #
@@ -72,7 +75,12 @@ defmodule ClientUtils.Evidence.CTRFFormatter do
           "duration" => stop - state.start
         },
         "tests" => tests,
-        "environment" => state.environment
+        "environment" =>
+          Map.update!(
+            state.environment,
+            "extra",
+            &Map.merge(&1, Application.get_env(:client_utils, :ctrf_extra, %{}))
+          )
       }
     }
 

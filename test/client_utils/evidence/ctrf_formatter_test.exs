@@ -25,7 +25,7 @@ defmodule ClientUtils.Evidence.CTRFFormatterTest do
     use ExUnit.Case
 
     test "adds numbers" do
-      assert 1 + 1 == 2
+      Application.put_env(:client_utils, :ctrf_extra, %{"math.driver" => "abacus"}); assert 1 + 1 == 2
     end
 
     test "adds wrong" do
@@ -149,7 +149,7 @@ defmodule ClientUtils.Evidence.CTRFFormatterTest do
     assert results["environment"] == %{
              "commit" => head,
              "branchName" => "main",
-             "extra" => %{"codemyspec.tree" => tree}
+             "extra" => %{"codemyspec.tree" => tree, "math.driver" => "abacus"}
            }
   end
 end
