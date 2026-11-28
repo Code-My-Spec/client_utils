@@ -163,6 +163,7 @@ defmodule ClientUtils.Evidence.CTRFFormatter do
   The working tree as tested, through a temporary index: the real one is
   never read into or written. The evidence a run writes is not part of it.
   """
+  @evidence ".code_my_spec/evidence"
   def tested_tree do
     top = git(["rev-parse", "--show-toplevel"])
     index = Path.join(System.tmp_dir!(), "ctrf-index-#{uuid()}")
@@ -170,8 +171,9 @@ defmodule ClientUtils.Evidence.CTRFFormatter do
 
     try do
       with {_, 0} <- System.cmd("git", ["read-tree", "HEAD"], opts),
-           {_, 0} <-
-             System.cmd("git", ["add", "-A", "--", ".", ":!.code_my_spec/evidence"], opts),
+           {_, 0} <- System.cmd("git", ["add", "-A"], opts),
+           # Not a pathspec on add: naming an ignored path makes add exit 1.
+           {_, 0} <- System.cmd("git", ~w(rm -r -q --cached --ignore-unmatch #{@evidence}), opts),
            {tree, 0} <- System.cmd("git", ["write-tree"], opts) do
         String.trim(tree)
       else

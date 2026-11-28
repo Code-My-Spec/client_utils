@@ -81,12 +81,14 @@ defmodule ClientUtils.Evidence.JourneyEvidenceTest do
 
   test "a report made at another tree is stale", %{dir: dir} do
     File.rm!(Path.join(dir, ".code_my_spec/journeys/ghost.yml"))
-    write!(dir, ".gitignore", "/_build/\n/deps/\n")
+    write!(dir, ".gitignore", "/_build/\n/deps/\n/.code_my_spec/evidence/\n")
     git = ~w(-c user.name=t -c user.email=t@t.invalid)
     {_, 0} = System.cmd("git", git ++ ~w(add -A), cd: dir)
     {_, 0} = System.cmd("git", git ++ ~w(commit -qm walk), cd: dir)
 
     assert {_, 0} = walk(dir)
+    [ctrf] = Path.wildcard(Path.join(dir, ".code_my_spec/evidence/*.ctrf.json"))
+    assert JSON.decode!(File.read!(ctrf))["results"]["environment"]["extra"]["codemyspec.tree"]
     # The run's own evidence is not part of the tree it was made at.
     assert {out, 0} = coverage(dir)
     assert results(out) == []
