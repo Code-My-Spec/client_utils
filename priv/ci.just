@@ -73,7 +73,8 @@ journey-coverage:
 # its last invocation there: none (never reached, or killed) re-runs whole; exit
 # 0 is skipped; red with failing tests re-runs --failed; any other red re-runs
 # whole. The journeys always re-run whole: a stage starts from the one before.
-# Both steps run; non-zero if either still fails.
+# certify and ci-extra always run first (a red certify leaves no exunit evidence
+# to retry from) and journey coverage always last. Non-zero if any still fails.
 #
 # Re-run only what the last ci left red.
 retry *_loop_dirs:
@@ -97,13 +98,16 @@ retry *_loop_dirs:
     echo "→ unit tests: $unit, journeys: $journeys"
     failed() { [ "$1" = failed ] && echo --failed; }
 
+    status=0
+    just certify || status=1
+    just ci-extra || status=1
     MIX_ENV=test mix ecto.create --quiet || exit 1
     MIX_ENV=test mix ecto.migrate || exit 1
-    status=0
     if [ "$unit" != skip ]; then
         MIX_ENV=test {{evidence}} run exunit -- {{exunit}} $(failed "$unit") || status=1
     fi
-    [ "$journeys" = skip ] && exit "$status"
-    MIX_ENV=test {{time_limit}} 120 10 "journey step" -- {{evidence}} run exunit -- {{exunit}} --seed 0 --include journey test/journeys/*_test.exs || status=1
+    if [ "$journeys" != skip ]; then
+        MIX_ENV=test {{time_limit}} 120 10 "journey step" -- {{evidence}} run exunit -- {{exunit}} --seed 0 --include journey test/journeys/*_test.exs || status=1
+    fi
     just journey-coverage || status=1
     exit "$status"

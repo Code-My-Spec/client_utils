@@ -29,6 +29,19 @@ defmodule ClientUtils.CiJustTest do
     assert steps == Enum.sort(steps)
   end
 
+  test "retry runs certify and the hook first, and always ends with journey coverage" do
+    retry = recipe("retry")
+    certify = index(retry, "just certify")
+    coverage = index(retry, "just journey-coverage")
+
+    assert certify < index(retry, "just ci-extra")
+    assert index(retry, "just ci-extra") < index(retry, "run exunit")
+    # No early exit between the start and coverage: a skipped step still reaches it.
+    refute retry
+           |> Enum.slice(0..coverage)
+           |> Enum.any?(&(&1 =~ ~r/\bexit\b/ and not (&1 =~ "|| exit 1")))
+  end
+
   test "ci, retry and certify never drive a browser" do
     for name <- ~w(ci retry certify), line <- recipe(name) do
       refute line =~ ~r/CMS_E2E|CMS_JOURNEY_SLIDES_DIR|playwright|npm ci/, "#{name}: #{line}"
