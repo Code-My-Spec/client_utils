@@ -79,6 +79,23 @@ defmodule ClientUtils.Evidence.JourneyEvidenceTest do
     assert out =~ "no CTRF report holds a journey test"
   end
 
+  test "a report made at another tree is stale", %{dir: dir} do
+    File.rm!(Path.join(dir, ".code_my_spec/journeys/ghost.yml"))
+    write!(dir, ".gitignore", "/_build/\n/deps/\n")
+    git = ~w(-c user.name=t -c user.email=t@t.invalid)
+    {_, 0} = System.cmd("git", git ++ ~w(add -A), cd: dir)
+    {_, 0} = System.cmd("git", git ++ ~w(commit -qm walk), cd: dir)
+
+    assert {_, 0} = walk(dir)
+    # The run's own evidence is not part of the tree it was made at.
+    assert {out, 0} = coverage(dir)
+    assert results(out) == []
+
+    write!(dir, "lib/changed.ex", "")
+    assert {out, 1} = coverage(dir)
+    assert [%{"ruleId" => "report-stale"}] = results(out)
+  end
+
   defp write!(dir, path, body) do
     path = Path.join(dir, path)
     File.mkdir_p!(Path.dirname(path))

@@ -159,16 +159,19 @@ defmodule ClientUtils.Evidence.CTRFFormatter do
     |> Map.new()
   end
 
-  # The working tree as tested, through a temporary index: the real one is
-  # never read into or written.
-  defp tested_tree do
+  @doc """
+  The working tree as tested, through a temporary index: the real one is
+  never read into or written. The evidence a run writes is not part of it.
+  """
+  def tested_tree do
     top = git(["rev-parse", "--show-toplevel"])
     index = Path.join(System.tmp_dir!(), "ctrf-index-#{uuid()}")
     opts = [cd: top, env: [{"GIT_INDEX_FILE", index}], stderr_to_stdout: true]
 
     try do
       with {_, 0} <- System.cmd("git", ["read-tree", "HEAD"], opts),
-           {_, 0} <- System.cmd("git", ["add", "-A"], opts),
+           {_, 0} <-
+             System.cmd("git", ["add", "-A", "--", ".", ":!.code_my_spec/evidence"], opts),
            {tree, 0} <- System.cmd("git", ["write-tree"], opts) do
         String.trim(tree)
       else

@@ -1,5 +1,6 @@
 defmodule ClientUtils.CloudflareTunnelTest do
-  use ExUnit.Case, async: true
+  # Not async: it points PATH, which is global, at nothing.
+  use ExUnit.Case, async: false
 
   alias ClientUtils.CloudflareTunnel
 

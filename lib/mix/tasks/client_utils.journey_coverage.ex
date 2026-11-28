@@ -7,12 +7,15 @@ defmodule Mix.Tasks.ClientUtils.JourneyCoverage do
   Reads the project's `.code_my_spec/journeys/*.yml` and the newest CTRF report
   in its `.code_my_spec/evidence/` that holds a journey test, and prints SARIF on
   stdout: one error per stage that has no passed test tagged `journey:<slug>`
-  and `stage:<id>` (skipped is not passed). Exits 1 when there is any, and fails
+  and `stage:<id>` (skipped is not passed), and one when the report was made
+  at another tree than the working tree's. Exits 1 when there is any, and fails
   when no report holds a journey test. Needs `yaml_elixir`.
   """
   @shortdoc "Fails unless every journey stage passed in the last journeys run"
 
   use Mix.Task
+
+  alias ClientUtils.Evidence.CTRFFormatter
 
   @impl true
   def run(argv) do
@@ -47,20 +50,42 @@ defmodule Mix.Tasks.ClientUtils.JourneyCoverage do
           into: MapSet.new(),
           do: MapSet.new(t["tags"] || [])
 
-    for path <- Enum.sort(Path.wildcard(".code_my_spec/journeys/*.yml")),
-        slug = Path.basename(path, ".yml"),
-        {:ok, yaml} = YamlElixir.read_from_file(path),
-        stage <- yaml["stages"] || [],
-        not Enum.any?(
-          passed,
-          &MapSet.subset?(MapSet.new(["journey:#{slug}", "stage:#{stage["id"]}"]), &1)
-        ) do
-      %{
-        "ruleId" => "stage-not-passed",
-        "level" => "error",
-        "message" => %{"text" => "stage #{stage["id"]} of #{slug} has no passed test in #{ctrf}"},
-        "locations" => [%{"physicalLocation" => %{"artifactLocation" => %{"uri" => path}}}]
-      }
+    stale(ctrf) ++
+      for path <- Enum.sort(Path.wildcard(".code_my_spec/journeys/*.yml")),
+          slug = Path.basename(path, ".yml"),
+          {:ok, yaml} = YamlElixir.read_from_file(path),
+          stage <- yaml["stages"] || [],
+          not Enum.any?(
+            passed,
+            &MapSet.subset?(MapSet.new(["journey:#{slug}", "stage:#{stage["id"]}"]), &1)
+          ) do
+        %{
+          "ruleId" => "stage-not-passed",
+          "level" => "error",
+          "message" => %{
+            "text" => "stage #{stage["id"]} of #{slug} has no passed test in #{ctrf}"
+          },
+          "locations" => [%{"physicalLocation" => %{"artifactLocation" => %{"uri" => path}}}]
+        }
+      end
+  end
+
+  # A report with no tree (no commit yet) cannot be stale.
+  defp stale(ctrf) do
+    made = JSON.decode!(File.read!(ctrf))["results"]["environment"]["extra"]["codemyspec.tree"]
+    now = made && CTRFFormatter.tested_tree()
+
+    if made && now != made do
+      [
+        %{
+          "ruleId" => "report-stale",
+          "level" => "error",
+          "message" => %{"text" => "#{ctrf} was made at tree #{made}, not this one (#{now})"},
+          "locations" => [%{"physicalLocation" => %{"artifactLocation" => %{"uri" => ctrf}}}]
+        }
+      ]
+    else
+      []
     end
   end
 
